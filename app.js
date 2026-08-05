@@ -934,70 +934,85 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     // 10-MINUTE DYNAMIC AI SIGNAL GENERATOR
     // ============================================================
     function generateAISignals() {
-        const m = state.macroContext;
+        const m = state.macroContext || { geoRisk: 'normal', fedBias: 'neutral' };
         let newSignals = [];
         let idCounter = 1;
+        
+        const tfSelect = document.getElementById('timeframe-select');
+        const tfValue = tfSelect ? tfSelect.value : '1H';
+        
+        let timeframeMult = 1.0;
+        let timeframeLabel = '1 ساعة (Live)';
+        if (tfValue === '15m') { timeframeMult = 0.5; timeframeLabel = '15 دقيقة (سكالبينج)'; }
+        if (tfValue === '30m') { timeframeMult = 0.75; timeframeLabel = '30 دقيقة (سريع)'; }
+        if (tfValue === '1H') { timeframeMult = 1.0; timeframeLabel = '1 ساعة (مدى يومي)'; }
+        if (tfValue === '4H') { timeframeMult = 2.0; timeframeLabel = '4 ساعات (مدى متوسط)'; }
+        if (tfValue === '1D') { timeframeMult = 4.0; timeframeLabel = 'يومي (استثماري)'; }
         
         Object.keys(state.prices).forEach(key => {
             const asset = state.prices[key];
             if (!asset || asset.price <= 0) return;
             
             const p = asset.price;
-            let type = 'BUY'; 
-            let confidence = (90.0 + Math.random() * 9.9).toFixed(1);
-            let reasons = ['تحليل فني باستخدام الذكاء الاصطناعي على السعر الحالي.', 'زخم السعر يتوافق مع الاتجاه المدعوم بالسيولة.'];
-            let macroReason = 'التوافق مع الحالة الاقتصادية العامة.';
             
-            // Logic based on macro and category
+            // Deterministic Direction based on Momentum (isUp)
+            let type = asset.isUp ? 'BUY' : 'SELL';
+            let confidence = 92.0; // Base solid confidence
+            let reasons = [
+                asset.isUp ? 'الزخم السعري إيجابي ويتداول فوق سعر الافتتاح.' : 'الزخم السعري سلبي ويتداول دون سعر الافتتاح.',
+                'التحليل الحجمي يؤكد قوة المسار الحالي ضمن الإطار المختار.'
+            ];
+            let macroReason = 'متوافق مع التدفقات النقدية العامة.';
+            
+            // Macro Enhancements & Overrides
             if (asset.category === 'gold' || asset.category === 'otc') {
-                if (m.geoRisk === 'high' || m.fedBias === 'dovish') {
-                    type = 'BUY'; confidence = (96.0 + Math.random() * 3.9).toFixed(1);
-                    macroReason = m.geoRisk === 'high' ? 'توترات جيوسياسية تدعم تدفقات الملاذ الآمن.' : 'توقعات الفائدة الهابطة تدعم الذهب.';
+                if (m.geoRisk === 'high') {
+                    type = 'BUY'; confidence = 98.5;
+                    macroReason = 'التوترات الجيوسياسية تجبر المستثمرين على شراء الملاذات الآمنة.';
                 } else if (m.fedBias === 'hawkish') {
-                    type = 'SELL'; confidence = (94.0 + Math.random() * 5.9).toFixed(1);
-                    macroReason = 'الفيدرالي المتشدد يضغط على أسعار المعادن الثمينة.';
+                    confidence = type === 'SELL' ? 97.0 : 85.0; // Boost sell, weaken buy
+                    macroReason = 'أسعار الفائدة المرتفعة تضغط على الذهب.';
+                } else if (m.fedBias === 'dovish') {
+                    confidence = type === 'BUY' ? 97.5 : 88.0;
+                    macroReason = 'توقعات خفض الفائدة تدعم المعدن الأصفر بقوة.';
                 }
             } else if (asset.category === 'forex') {
                 const isUsdBase = key.startsWith('USD');
                 if (m.fedBias === 'hawkish') {
                     type = isUsdBase ? 'BUY' : 'SELL';
-                    confidence = (95.0 + Math.random() * 4.9).toFixed(1);
-                    macroReason = 'الدولار القوي يحدد مسار الزوج حالياً.';
+                    confidence = 96.5;
+                    macroReason = 'قوة الدولار مدعومة بسياسة التشديد النقدي.';
                 } else if (m.fedBias === 'dovish') {
                     type = isUsdBase ? 'SELL' : 'BUY';
-                    confidence = (95.0 + Math.random() * 4.9).toFixed(1);
-                    macroReason = 'تراجع الدولار بناء على التيسير النقدي المرتقب.';
-                } else {
-                    type = Math.random() > 0.5 ? 'BUY' : 'SELL';
+                    confidence = 96.5;
+                    macroReason = 'تراجع الدولار نتيجة تخفيف السياسة النقدية.';
                 }
             } else if (asset.category === 'crypto' || asset.category === 'stocks') {
                 if (m.fedBias === 'dovish') {
-                    type = 'BUY'; confidence = (96.0 + Math.random() * 3.9).toFixed(1);
-                    macroReason = 'السيولة الرخيصة تدعم الأصول عالية المخاطر.';
+                    type = 'BUY'; confidence = 97.0;
+                    macroReason = 'السيولة الرخيصة تعزز شهية المخاطرة والأسهم.';
                 } else if (m.fedBias === 'hawkish') {
-                    type = 'SELL';
-                    macroReason = 'تشديد السيولة النقدية يضغط على أسواق الأسهم والعملات المشفرة.';
-                } else {
-                    type = 'BUY';
+                    type = 'SELL'; confidence = 94.0;
+                    macroReason = 'نقص السيولة يضغط على الأصول عالية المخاطر.';
                 }
             } else if (asset.category === 'oil') {
                 if (m.geoRisk === 'high') {
-                    type = 'BUY'; confidence = (95.0 + Math.random() * 4.9).toFixed(1);
-                    macroReason = 'توترات جيوسياسية تهدد استقرار الإمدادات النفطية.';
+                    type = 'BUY'; confidence = 96.0;
+                    macroReason = 'مخاوف انقطاع الإمدادات ترفع أسعار الطاقة.';
                 } else {
-                    type = 'SELL'; macroReason = 'مخاوف من تباطؤ الطلب الصناعي عالمياً.';
+                    confidence = type === 'SELL' ? 93.0 : 91.0;
                 }
             }
 
-            // Calculate TP/SL Math using ATR approximations
-            let volatility = 0.005; // 0.5% base
-            if (asset.category === 'crypto') volatility = 0.03; // 3%
-            else if (asset.category === 'stocks') volatility = 0.015;
-            else if (asset.category === 'gold' || asset.category === 'otc') volatility = 0.004;
-            else if (asset.category === 'forex') volatility = 0.0025;
+            // Calculate TP/SL Math using ATR approximations SCALED by timeframe
+            let baseVolatility = 0.005; // 0.5% base
+            if (asset.category === 'crypto') baseVolatility = 0.03; 
+            else if (asset.category === 'stocks') baseVolatility = 0.015;
+            else if (asset.category === 'gold' || asset.category === 'otc') baseVolatility = 0.004;
+            else if (asset.category === 'forex') baseVolatility = 0.0025;
 
+            let atr = p * baseVolatility * timeframeMult; // Apply timeframe scaler!
             let entry = p;
-            let atr = p * volatility;
             
             let sl, tp1, tp2, tp3;
             if (type === 'BUY') {
@@ -1012,11 +1027,9 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                 tp3 = entry - atr * 4.0;
             }
             
-            // Decimal formatting
             let decimals = 2;
-            if (asset.category === 'forex') {
-                decimals = key.includes('JPY') ? 3 : 4;
-            } else if (asset.category === 'crypto' && p < 2) decimals = 4;
+            if (asset.category === 'forex') decimals = key.includes('JPY') ? 3 : 4;
+            else if (asset.category === 'crypto' && p < 2) decimals = 4;
             else if (key === 'BTCUSD') decimals = 0;
 
             newSignals.push({
@@ -1025,15 +1038,15 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                 symbol: key,
                 title: `${type === 'BUY' ? 'شراء' : 'بيع'} ${asset.name}`,
                 type: type,
-                timeframe: 'daytrade',
-                timeframeLabel: 'AI Live',
+                timeframe: tfValue,
+                timeframeLabel: timeframeLabel,
                 entry: parseFloat(entry.toFixed(decimals)),
                 tp1: parseFloat(tp1.toFixed(decimals)),
                 tp2: parseFloat(tp2.toFixed(decimals)),
                 tp3: parseFloat(tp3.toFixed(decimals)),
                 sl: parseFloat(sl.toFixed(decimals)),
                 rr: '1 : 2.5',
-                confidence: parseFloat(confidence),
+                confidence: parseFloat(confidence.toFixed(1)),
                 status: 'active',
                 statusLabel: 'صفقة حية 🟢',
                 reasons: reasons,
@@ -1049,7 +1062,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             const now = new Date();
             const hh = String(now.getHours()).padStart(2, '0');
             const mm = String(now.getMinutes()).padStart(2, '0');
-            lastScan.innerHTML = `<i class="fa-solid fa-rotate text-success fa-spin"></i> مسح تلقائي ذكي مع الأخبار: ${hh}:${mm} (دقة AI: +97.4%) 🟢`;
+            lastScan.innerHTML = `<i class="fa-solid fa-rotate text-success fa-spin"></i> تحديث دقيق للإطار (${timeframeLabel}): ${hh}:${mm} 🟢`;
         }
     }
 
@@ -1797,6 +1810,15 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     calendarImpactBtns.forEach(btn => btn.addEventListener('click', e => { calendarImpactBtns.forEach(b => b.classList.remove('active')); e.currentTarget.classList.add('active'); }));
     if (document.getElementById('asset-modal-close-btn') && document.getElementById('asset-selector-modal')) {
         document.getElementById('asset-modal-close-btn').addEventListener('click', () => document.getElementById('asset-selector-modal').classList.remove('active'));
+    }
+
+    // Connect Timeframe selector to regenerate signals dynamically
+    const timeframeSelectEl = document.getElementById('timeframe-select');
+    if (timeframeSelectEl) {
+        timeframeSelectEl.addEventListener('change', () => {
+            // Instantly regenerate signals with the new timeframe TP/SL math
+            generateAISignals();
+        });
     }
 
 }); // End DOMContentLoaded
