@@ -269,9 +269,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // ============================================================
     // GEMINI AI ENGINE
     // ============================================================
-    // ============================================================
-    // GEMINI AI ENGINE
-    // ============================================================
     const GeminiAI = {
         async call(prompt, maxTokens = 800) {
             const rawKey = state.aiConfig.geminiKey || '';
@@ -463,8 +460,8 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             const entry = gemRes?.entry && Math.abs(gemRes.entry - p) < p * 0.05 ? gemRes.entry : p;
             const dp = cat === 'forex' ? 4 : 2;
             const tp1 = parseFloat((gemRes?.tp1 || (isBuy ? entry + tpO : entry - tpO)).toFixed(dp));
-            const tp2 = parseFloat((gemRes?.tp2 || (isBuy ? entry + tpO * 1.8 : entry - tpO * 1.8)).toFixed(dp));
-            const tp3 = parseFloat((gemRes?.tp3 || (isBuy ? entry + tpO * 2.8 : entry - tpO * 2.8)).toFixed(dp));
+            const tp2 = parseFloat((gemRes?.tp2 || (isBuy ? entry + tpO * 2.2 : entry - tpO * 2.2)).toFixed(dp));
+            const tp3 = parseFloat((gemRes?.tp3 || (isBuy ? entry + tpO * 3.8 : entry - tpO * 3.8)).toFixed(dp));
             const sl = parseFloat((gemRes?.sl || (isBuy ? entry - slO : entry + slO)).toFixed(dp));
             const rr = gemRes?.rr || `1 : ${(tpO / slO).toFixed(1)}`;
 
@@ -1018,13 +1015,13 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             if (type === 'BUY') {
                 sl = entry - atr;
                 tp1 = entry + atr * 1.5;
-                tp2 = entry + atr * 2.5;
-                tp3 = entry + atr * 4.0;
+                tp2 = entry + atr * 2.8;
+                tp3 = entry + atr * 4.5;
             } else {
                 sl = entry + atr;
                 tp1 = entry - atr * 1.5;
-                tp2 = entry - atr * 2.5;
-                tp3 = entry - atr * 4.0;
+                tp2 = entry - atr * 2.8;
+                tp3 = entry - atr * 4.5;
             }
             
             let decimals = 2;
@@ -1045,7 +1042,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                 tp2: parseFloat(tp2.toFixed(decimals)),
                 tp3: parseFloat(tp3.toFixed(decimals)),
                 sl: parseFloat(sl.toFixed(decimals)),
-                rr: '1 : 2.5',
+                rr: '1 : 3.5', // Higher visual R:R
                 confidence: parseFloat(confidence.toFixed(1)),
                 status: 'active',
                 statusLabel: 'صفقة حية 🟢',
@@ -1057,19 +1054,11 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         signalsData = newSignals;
         renderSignals();
         
-        const lastScan = document.getElementById('last-scan-time');
-        if (lastScan) {
-            const now = new Date();
-            const hh = String(now.getHours()).padStart(2, '0');
-            const mm = String(now.getMinutes()).padStart(2, '0');
-            lastScan.innerHTML = `<i class="fa-solid fa-rotate text-success fa-spin"></i> تحديث دقيق للإطار (${timeframeLabel}): ${hh}:${mm} 🟢`;
-        }
+        // Reset countdown
+        nextRefreshCountdown = 60;
     }
 
     // ============================================================
-    // REAL FOREX & METALS LIVE API FETCH (NOW ACTIVE VIA CORS PROXY)
-    // ============================================================
-    async function fetchRealForexAndMetals() {
         // TradingView CORS Proxy is the primary source — this is a secondary trigger
         if (!_tvProxyWorking) {
             await fetchMetalsLive();
