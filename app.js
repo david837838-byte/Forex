@@ -1793,7 +1793,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     // Priority: 1) TradingView CORS Proxy  2) Binance WS  3) Metals.Live  4) Python Backend
     // ============================================================
     RealTimeWebSocketManager.startAll(); // Start 24/7 background WebSocket stream (Binance Crypto Live 24/7)
-    fetchPythonYFinancePrices(); // Primary Exclusive Source: TradingView CORS Proxy
+    fetchPythonYFinancePrices().then(() => { setTimeout(generateAISignals, 2000); });
     fetchCrypto(); // Binance 24/7 Live Crypto API Fetch
 
     setInterval(updateSession, 1000);
