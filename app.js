@@ -1777,7 +1777,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
 
     function autoRefreshSignalsEveryMinute() {
         updatePnL();
-        fetchMacroAndNews(); // <--- DYNAMIC AI SIGNALS REFRESH WITH NEWS
+        fetchMacroAndNews(); generateAISignals();
         renderSignals();
         const lastScan = document.getElementById('last-scan-time');
         if (lastScan) {
