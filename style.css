@@ -2070,3 +2070,13 @@ body {
     50% { border-color: var(--gold); box-shadow: 0 0 20px var(--gold); }
 }
 
+
+@media (max-width: 600px) {
+  .signals-grid { grid-template-columns: 1fr; }
+  .filters-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .filter-group { flex-direction: column; align-items: stretch; }
+  .custom-select { width: 100%; }
+  .ai-chat-trigger { left: 1rem; bottom: 5rem; /* Move up for mobile navigation */ }
+  .ai-trigger-text { display: none; } /* Show only icon on small phones */
+  .ai-chat-drawer { width: 90%; left: 5%; bottom: 10rem; }
+}

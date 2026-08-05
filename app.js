@@ -269,6 +269,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // ============================================================
     // GEMINI AI ENGINE
     // ============================================================
+    // ============================================================
+    // GEMINI AI ENGINE
+    // ============================================================
     const GeminiAI = {
         async call(prompt, maxTokens = 800) {
             const rawKey = state.aiConfig.geminiKey || '';
@@ -460,8 +463,8 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             const entry = gemRes?.entry && Math.abs(gemRes.entry - p) < p * 0.05 ? gemRes.entry : p;
             const dp = cat === 'forex' ? 4 : 2;
             const tp1 = parseFloat((gemRes?.tp1 || (isBuy ? entry + tpO : entry - tpO)).toFixed(dp));
-            const tp2 = parseFloat((gemRes?.tp2 || (isBuy ? entry + tpO * 2.2 : entry - tpO * 2.2)).toFixed(dp));
-            const tp3 = parseFloat((gemRes?.tp3 || (isBuy ? entry + tpO * 3.8 : entry - tpO * 3.8)).toFixed(dp));
+            const tp2 = parseFloat((gemRes?.tp2 || (isBuy ? entry + tpO * 1.8 : entry - tpO * 1.8)).toFixed(dp));
+            const tp3 = parseFloat((gemRes?.tp3 || (isBuy ? entry + tpO * 2.8 : entry - tpO * 2.8)).toFixed(dp));
             const sl = parseFloat((gemRes?.sl || (isBuy ? entry - slO : entry + slO)).toFixed(dp));
             const rr = gemRes?.rr || `1 : ${(tpO / slO).toFixed(1)}`;
 
@@ -934,10 +937,10 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         const m = state.macroContext || { geoRisk: 'normal', fedBias: 'neutral' };
         let newSignals = [];
         let idCounter = 1;
-        
+
         const tfSelect = document.getElementById('timeframe-select');
         const tfValue = tfSelect ? tfSelect.value : '1H';
-        
+
         let timeframeMult = 1.0;
         let timeframeLabel = '1 ساعة (Live)';
         if (tfValue === '15m') { timeframeMult = 0.5; timeframeLabel = '15 دقيقة (سكالبينج)'; }
@@ -945,13 +948,13 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         if (tfValue === '1H') { timeframeMult = 1.0; timeframeLabel = '1 ساعة (مدى يومي)'; }
         if (tfValue === '4H') { timeframeMult = 2.0; timeframeLabel = '4 ساعات (مدى متوسط)'; }
         if (tfValue === '1D') { timeframeMult = 4.0; timeframeLabel = 'يومي (استثماري)'; }
-        
+
         Object.keys(state.prices).forEach(key => {
             const asset = state.prices[key];
             if (!asset || asset.price <= 0) return;
-            
+
             const p = asset.price;
-            
+
             // Deterministic Direction based on Momentum (isUp)
             let type = asset.isUp ? 'BUY' : 'SELL';
             let confidence = 92.0; // Base solid confidence
@@ -960,7 +963,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                 'التحليل الحجمي يؤكد قوة المسار الحالي ضمن الإطار المختار.'
             ];
             let macroReason = 'متوافق مع التدفقات النقدية العامة.';
-            
+
             // Macro Enhancements & Overrides
             if (asset.category === 'gold' || asset.category === 'otc') {
                 if (m.geoRisk === 'high') {
@@ -1003,27 +1006,27 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
 
             // Calculate TP/SL Math using ATR approximations SCALED by timeframe
             let baseVolatility = 0.005; // 0.5% base
-            if (asset.category === 'crypto') baseVolatility = 0.03; 
+            if (asset.category === 'crypto') baseVolatility = 0.03;
             else if (asset.category === 'stocks') baseVolatility = 0.015;
             else if (asset.category === 'gold' || asset.category === 'otc') baseVolatility = 0.004;
             else if (asset.category === 'forex') baseVolatility = 0.0025;
 
             let atr = p * baseVolatility * timeframeMult; // Apply timeframe scaler!
             let entry = p;
-            
+
             let sl, tp1, tp2, tp3;
             if (type === 'BUY') {
                 sl = entry - atr;
                 tp1 = entry + atr * 1.5;
-                tp2 = entry + atr * 2.8;
-                tp3 = entry + atr * 4.5;
+                tp2 = entry + atr * 2.5;
+                tp3 = entry + atr * 4.0;
             } else {
                 sl = entry + atr;
                 tp1 = entry - atr * 1.5;
-                tp2 = entry - atr * 2.8;
-                tp3 = entry - atr * 4.5;
+                tp2 = entry - atr * 2.5;
+                tp3 = entry - atr * 4.0;
             }
-            
+
             let decimals = 2;
             if (asset.category === 'forex') decimals = key.includes('JPY') ? 3 : 4;
             else if (asset.category === 'crypto' && p < 2) decimals = 4;
@@ -1042,7 +1045,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                 tp2: parseFloat(tp2.toFixed(decimals)),
                 tp3: parseFloat(tp3.toFixed(decimals)),
                 sl: parseFloat(sl.toFixed(decimals)),
-                rr: '1 : 3.5', // Higher visual R:R
+                rr: '1 : 2.5',
                 confidence: parseFloat(confidence.toFixed(1)),
                 status: 'active',
                 statusLabel: 'صفقة حية 🟢',
@@ -1050,15 +1053,23 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                 macro: macroReason
             });
         });
-        
+
         signalsData = newSignals;
         renderSignals();
-        
-        // Reset countdown
-        nextRefreshCountdown = 60;
+
+        const lastScan = document.getElementById('last-scan-time');
+        if (lastScan) {
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            lastScan.innerHTML = `<i class="fa-solid fa-rotate text-success fa-spin"></i> تحديث دقيق للإطار (${timeframeLabel}): ${hh}:${mm} 🟢`;
+        }
     }
 
     // ============================================================
+    // REAL FOREX & METALS LIVE API FETCH (NOW ACTIVE VIA CORS PROXY)
+    // ============================================================
+    async function fetchRealForexAndMetals() {
         // TradingView CORS Proxy is the primary source — this is a secondary trigger
         if (!_tvProxyWorking) {
             await fetchMetalsLive();
@@ -1238,8 +1249,8 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     // ADMIN PANEL — FIX BUG-06, BUG-07
     // ============================================================
     if (adminPanelBtn && adminModal) {
-        let adminLoggedIn = false; 
-        
+        let adminLoggedIn = false;
+
         function getAdminCreds() {
             return {
                 user: localStorage.getItem('mp_admin_user') || 'admin',
