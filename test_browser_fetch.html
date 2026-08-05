@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Browser Fetch Test</title>
+</head>
+<body>
+    <h2>Live Price Fetch Test</h2>
+    <div id="results">Testing...</div>
+
+    <script>
+    async function testFetch() {
+        const results = document.getElementById('results');
+        results.innerHTML = '';
+        
+        const symbolsMap = {
+            'GC=F':     'XAUUSD (Gold)',
+            'SI=F':     'XAGUSD (Silver)',
+            'CL=F':     'USOIL (Oil)',
+            'EURUSD=X': 'EURUSD',
+            'GBPUSD=X': 'GBPUSD',
+            '^DJI':     'US30 (Dow Jones)',
+            'NVDA':     'NVDA',
+            'TSLA':     'TSLA'
+        };
+
+        for (const [sym, name] of Object.entries(symbolsMap)) {
+            try {
+                const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1m&range=1d`;
+                const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+                const r = await fetch(proxyUrl);
+                if (r.ok) {
+                    const d = await r.json();
+                    const meta = d?.chart?.result?.[0]?.meta;
+                    if (meta && meta.regularMarketPrice) {
+                        results.innerHTML += `<p style="color:green">✅ <strong>${name}</strong>: $${meta.regularMarketPrice}</p>`;
+                        continue;
+                    }
+                }
+                results.innerHTML += `<p style="color:red">❌ <strong>${name}</strong>: Failed</p>`;
+            } catch (e) {
+                results.innerHTML += `<p style="color:red">❌ <strong>${name}</strong>: Error ${e.message}</p>`;
+            }
+        }
+    }
+    testFetch();
+    </script>
+</body>
+</html>
