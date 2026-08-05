@@ -1444,7 +1444,7 @@ body {
     position: fixed;
     bottom: 1.5rem;
     left: 1.5rem;
-    z-index: 998;
+    z-index: 9999;
     background: linear-gradient(135deg, var(--bg-dark-secondary), #131c2d);
     border: 1px solid var(--gold);
     box-shadow: 0 0 25px rgba(255, 215, 0, 0.3);
