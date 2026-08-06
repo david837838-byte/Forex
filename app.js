@@ -1822,7 +1822,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     // ============================================================
     // COOLDOWN TIMER LOGIC FOR SIGNAL GENERATION
     // ============================================================
-    const aiGenBtnRef = document.getElementById('gen-btn');
+    const aiGenBtnRef = document.getElementById('generate-ai-signal-btn');
     const COOLDOWN_MINUTES = 10;
     const COOLDOWN_MS = COOLDOWN_MINUTES * 60 * 1000;
     let timerInterval = null;
@@ -1869,7 +1869,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                 setTimeout(() => {
                     generateAISignals();
                     // We must manually grab it again because we cloned it
-                    const currentGenBtn = document.getElementById('gen-btn');
+                    const currentGenBtn = document.getElementById('generate-ai-signal-btn');
                     if (currentGenBtn) currentGenBtn.disabled = true;
                     
                     if (timerInterval) clearInterval(timerInterval);
