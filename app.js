@@ -1845,6 +1845,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     }
 
     function loadChart(symbol) {
+
         const ct = document.getElementById('tradingview_widget_container');
         if (!ct || !window.TradingView) return;
         ct.innerHTML = '';
