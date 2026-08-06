@@ -132,30 +132,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function fetchLiveNews() {
         try {
-            // Using allorigins proxy to bypass CORS and Cloudflare for Investing.com RSS
-            const rssUrl = encodeURIComponent('https://www.investing.com/rss/news_285.rss');
-            const res = await fetch(`https://api.allorigins.win/get?url=${rssUrl}`);
+            // Using a reliable NewsAPI proxy that doesn't require keys or CORS bypass
+            const res = await fetch('https://saurav.tech/NewsAPI/top-headlines/category/business/us.json');
             const data = await res.json();
             
-            if (data.contents) {
-                const parser = new DOMParser();
-                const xmlDoc = parser.parseFromString(data.contents, "text/xml");
-                const items = Array.from(xmlDoc.querySelectorAll("item")).slice(0, 6);
+            if (data.status === 'ok' && data.articles) {
+                // Filter out empty articles or non-English/junk
+                let validArticles = data.articles.filter(a => a.title && !a.title.includes('Removed'));
                 
-                newsData = items.map(item => {
-                    let title = item.querySelector("title") ? item.querySelector("title").textContent : "أخبار عاجلة";
-                    let pubDateStr = item.querySelector("pubDate") ? item.querySelector("pubDate").textContent : new Date().toISOString();
-                    
+                newsData = validArticles.slice(0, 6).map(item => {
+                    let title = item.title;
                     let sentiment = 'أخبار عامة (AI)';
                     let sentimentType = 'neutral';
-                    let impact = 'متوسط';
+                    let impact = 'متوسط التأثير';
                     let impactClass = 'badge-warning';
 
                     const tLower = title.toLowerCase();
+                    // AI Keyword analysis
                     if(tLower.includes('gold') || tLower.includes('xau')) { sentiment = 'مرتبط بالذهب'; sentimentType = 'gold-up'; }
-                    else if(tLower.includes('usd') || tLower.includes('fed') || tLower.includes('rate')) { sentiment = 'مؤثر للدولار'; sentimentType = 'bearish'; impact = 'عالي التأثير'; impactClass = 'badge-live'; }
+                    else if(tLower.includes('usd') || tLower.includes('fed') || tLower.includes('rate') || tLower.includes('inflation')) { sentiment = 'مؤثر للدولار'; sentimentType = 'bearish'; impact = 'عالي التأثير'; impactClass = 'badge-live'; }
                     else if(tLower.includes('eur') || tLower.includes('ecb')) { sentiment = 'مرتبط باليورو'; sentimentType = 'bullish'; }
                     else if(tLower.includes('oil') || tLower.includes('wti')) { sentiment = 'مرتبط بالنفط'; sentimentType = 'bullish'; }
+                    else if(tLower.includes('stock') || tLower.includes('wall street')) { sentiment = 'مؤثر للأسهم'; sentimentType = 'bullish'; }
 
                     if(tLower.includes('surge') || tLower.includes('jump') || tLower.includes('rally') || tLower.includes('plunge') || tLower.includes('crash')) {
                         impact = 'عالي التأثير جداً'; impactClass = 'badge-live';
@@ -163,7 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     // Relative time
                     let timeStr = 'اليوم';
-                    const pubDate = new Date(pubDateStr);
+                    const pubDate = new Date(item.publishedAt);
                     const now = new Date();
                     const diffMins = Math.floor((now - pubDate) / 60000);
                     if (diffMins < 60 && diffMins >= 0) timeStr = `منذ ${diffMins} دقيقة`;
