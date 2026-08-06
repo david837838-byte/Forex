@@ -1455,7 +1455,11 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             else if (sig.asset === 'forex') tvSymbol = 'FX:' + sig.symbol.replace('/','');
             else if (sig.asset === 'oil') tvSymbol = 'TVC:USOIL';
             else if (sig.asset === 'gold') tvSymbol = 'OANDA:XAUUSD';
-            else if (sig.asset === 'stocks') tvSymbol = sig.symbol; // e.g., NVDA, US30
+            else if (sig.asset === 'stocks') {
+                if (sig.symbol === 'US30') tvSymbol = 'TVC:US30';
+                else if (sig.symbol === 'US100') tvSymbol = 'TVC:US100';
+                else tvSymbol = 'NASDAQ:' + sig.symbol;
+            }
             else tvSymbol = sig.symbol.replace('/','');
 
             let tf = '60'; // 1H
