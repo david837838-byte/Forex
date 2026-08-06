@@ -436,10 +436,8 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             const ta = TA.analyze(assetKey);
             const macEv = Macro.evaluate(asset.category);
             const macSum = Macro.summary();
-            const local = (ta.score * 0.5) + (macEv.score * 0.5);
-            const localDir = local >= 55 ? 'BUY' : local <= 45 ? 'SELL' : 'BUY';
-            const localConf = Math.round(88 + (Math.abs(local - 50) / 50) * 10);
-
+            const localDir = asset.isUp ? 'BUY' : 'SELL';
+            const localConf = asset.isUp ? 93.0 : 92.5;
             let gemRes = null, oaiRes = null;
             if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum);
             if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum);
