@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
         marketOpenStatus: false,
         adminMarketOverride: 'auto',
         adminAiAccuracy: 97.4,
+        favorites: JSON.parse(localStorage.getItem('mp_favorites') || '[]'),
         prices: {
             XAUUSD: { name: 'الذهب (XAUUSD)', price: 0, basePrice: 0, change: '--%', isUp: true, category: 'gold' },
             XAGUSD: { name: 'الفضة (XAGUSD)', price: 0, basePrice: 0, change: '--%', isUp: true, category: 'gold' },
@@ -966,6 +967,9 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             
             const ta = TA.analyze(key);
             
+            // Check if asset is in favorites (Give it an AI priority boost to favor personal selections)
+            if (state.favorites.includes(key)) confidence += 5;
+            
             // Check SMC/ICT basic alignment
             const isTrendAligned = (type === 'BUY' && ta.ema50 > ta.ema200) || (type === 'SELL' && ta.ema50 < ta.ema200);
             if (isTrendAligned) confidence += 5;
@@ -1090,7 +1094,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     // ============================================================
     function renderSignals() {
         const filtered = signalsData.filter(sig => {
-            const ma = state.activeAssetFilter === 'all' || sig.asset === state.activeAssetFilter;
+            const ma = state.activeAssetFilter === 'all' || (state.activeAssetFilter === 'favorites' && state.favorites.includes(sig.symbol)) || sig.asset === state.activeAssetFilter;
             const mt = state.activeTimeframeFilter === 'all' || sig.timeframe === state.activeTimeframeFilter;
             let ms = true;
             if (state.activeTraderStyle !== 'all') {
@@ -1540,6 +1544,9 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                 keysToScan = Object.keys(state.prices);
                 // Limit to top 5 volatile/moving assets to prevent API rate limits if 'all' is selected
                 keysToScan = keysToScan.sort((a,b) => Math.abs(state.prices[b].change) - Math.abs(state.prices[a].change)).slice(0, 5);
+            } else if (state.activeAssetFilter === 'favorites') {
+                keysToScan = [...state.favorites];
+                if (keysToScan.length === 0) { alert('لم تقم بإضافة أي أسواق للمفضلة حتى الآن! اضغط على زر "إدارة المفضلات" لاختيار أسواقك.'); return; }
             } else {
                 keysToScan = Object.keys(state.prices).filter(k => state.prices[k].category === (state.activeAssetFilter === 'metals' ? 'gold' : state.activeAssetFilter));
                 // Handle OTC special case or if active filter doesn't map directly
@@ -1617,6 +1624,59 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     }
 
     if (refreshBtn) refreshBtn.addEventListener('click', () => { renderSignals(); updateTicker(); });
+
+    
+    // ============================================================
+    // FAVORITES MODAL LOGIC
+    // ============================================================
+    const favModal = document.getElementById('favorites-modal');
+    const manageFavBtn = document.getElementById('manage-fav-btn');
+    const favModalClose = document.getElementById('fav-modal-close-btn');
+    const favModalDismiss = document.getElementById('fav-modal-dismiss-btn');
+    const favModalSave = document.getElementById('fav-modal-save-btn');
+    const favListContainer = document.getElementById('favorites-list-container');
+
+    function renderFavCheckboxes() {
+        if (!favListContainer) return;
+        favListContainer.innerHTML = '';
+        Object.keys(state.prices).forEach(key => {
+            const asset = state.prices[key];
+            const isChecked = state.favorites.includes(key) ? 'checked' : '';
+            const html = `
+                <label style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.03); padding: 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); cursor: pointer; transition: all 0.2s;">
+                    <input type="checkbox" class="fav-checkbox" value="${key}" ${isChecked} style="accent-color: var(--gold); width: 16px; height: 16px;">
+                    <span style="font-size: 0.85rem;">${asset.name}</span>
+                </label>
+            `;
+            favListContainer.insertAdjacentHTML('beforeend', html);
+        });
+    }
+
+    if (manageFavBtn) {
+        manageFavBtn.addEventListener('click', () => {
+            renderFavCheckboxes();
+            if(favModal) favModal.classList.add('active');
+        });
+    }
+    const closeFavModal = () => { if(favModal) favModal.classList.remove('active'); };
+    if (favModalClose) favModalClose.addEventListener('click', closeFavModal);
+    if (favModalDismiss) favModalDismiss.addEventListener('click', closeFavModal);
+    if (favModalSave) {
+        favModalSave.addEventListener('click', () => {
+            const checkboxes = document.querySelectorAll('.fav-checkbox');
+            const newFavs = [];
+            checkboxes.forEach(cb => { if (cb.checked) newFavs.push(cb.value); });
+            state.favorites = newFavs;
+            localStorage.setItem('mp_favorites', JSON.stringify(newFavs));
+            closeFavModal();
+            if (state.activeAssetFilter === 'favorites') renderSignals();
+            
+            // Add a temporary success animation to the button
+            const originalText = favModalSave.innerHTML;
+            favModalSave.innerHTML = '<i class="fa-solid fa-check"></i> تم الحفظ';
+            setTimeout(() => { favModalSave.innerHTML = originalText; }, 1500);
+        });
+    }
 
     // ============================================================
     // FILTERS
