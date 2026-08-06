@@ -1225,6 +1225,29 @@
 
     <!-- Main JavaScript App Logic -->
     <script src="app.js"></script>
+
+    <!-- AI Assistant Floating Widget -->
+    <div id="ai-assistant-widget" class="ai-widget-container">
+        <button id="ai-toggle-btn" class="ai-toggle-btn">
+            <i class="fa-solid fa-robot"></i>
+        </button>
+        <div id="ai-chat-window" class="ai-chat-window hidden">
+            <div class="ai-chat-header">
+                <h4><i class="fa-solid fa-robot"></i> المساعد الذكي AI</h4>
+                <button id="ai-close-btn" class="ai-close-btn">&times;</button>
+            </div>
+            <div id="ai-chat-messages" class="ai-chat-messages">
+                <div class="ai-message bot">
+                    <p>مرحباً أيها المتداول! أنا المساعد الذكي الخاص بك. كيف يمكنني مساعدتك اليوم؟</p>
+                </div>
+            </div>
+            <div class="ai-chat-input-area">
+                <input type="text" id="ai-chat-input" placeholder="اكتب سؤالك هنا..." autocomplete="off">
+                <button id="ai-chat-send"><i class="fa-solid fa-paper-plane"></i></button>
+            </div>
+        </div>
+    </div>
+
 </body>
 
 </html>
