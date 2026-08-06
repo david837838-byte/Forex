@@ -1445,6 +1445,37 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         if (md) md.textContent = sig.macro;
         const rb = document.getElementById('ai-response-box');
         if (rb) { rb.style.display = 'none'; rb.innerHTML = ''; }
+        
+        const chartContainer = document.getElementById('modal-tradingview-chart');
+        if (chartContainer && window.TradingView) {
+            chartContainer.innerHTML = '';
+            
+            let tvSymbol = sig.symbol;
+            if (sig.asset === 'crypto') tvSymbol = 'BINANCE:' + sig.symbol.replace('/','');
+            else if (sig.asset === 'forex') tvSymbol = 'FX:' + sig.symbol.replace('/','');
+            else if (sig.asset === 'oil') tvSymbol = 'TVC:USOIL';
+            else if (sig.asset === 'gold') tvSymbol = 'OANDA:XAUUSD';
+            else if (sig.asset === 'stocks') tvSymbol = sig.symbol; // e.g., NVDA, US30
+            else tvSymbol = sig.symbol.replace('/','');
+
+            let tf = '60'; // 1H
+            if (sig.timeframe === 'scalping') tf = '15';
+            else if (sig.timeframe === 'daytrade') tf = '240';
+            else if (sig.timeframe === 'swing') tf = 'D';
+
+            new window.TradingView.widget({
+                autosize: true, symbol: tvSymbol, interval: tf, timezone: 'Asia/Riyadh',
+                theme: 'dark', style: '1', locale: 'ar', toolbar_bg: '#0f1623',
+                enable_publishing: false, hide_side_toolbar: true, hide_top_toolbar: false,
+                allow_symbol_change: false, container_id: 'modal-tradingview-chart',
+                studies: [
+                    "RSI@tv-basicstudies",
+                    "EMA@tv-basicstudies",
+                    "MACD@tv-basicstudies"
+                ]
+            });
+        }
+        
         signalModal.classList.add('active');
     }
 
