@@ -132,13 +132,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function fetchLiveNews() {
         try {
-            // Using rss2json free API to convert Investing.com Forex news RSS
+            // Using allorigins proxy to bypass CORS and Cloudflare for Investing.com RSS
             const rssUrl = encodeURIComponent('https://www.investing.com/rss/news_285.rss');
-            const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${rssUrl}`);
+            const res = await fetch(`https://api.allorigins.win/get?url=${rssUrl}`);
             const data = await res.json();
-            if (data.status === 'ok') {
-                newsData = data.items.slice(0, 6).map(item => {
-                    let title = item.title;
+            
+            if (data.contents) {
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(data.contents, "text/xml");
+                const items = Array.from(xmlDoc.querySelectorAll("item")).slice(0, 6);
+                
+                newsData = items.map(item => {
+                    let title = item.querySelector("title") ? item.querySelector("title").textContent : "أخبار عاجلة";
+                    let pubDateStr = item.querySelector("pubDate") ? item.querySelector("pubDate").textContent : new Date().toISOString();
+                    
                     let sentiment = 'أخبار عامة (AI)';
                     let sentimentType = 'neutral';
                     let impact = 'متوسط';
@@ -156,15 +163,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     // Relative time
                     let timeStr = 'اليوم';
-                    const pubDate = new Date(item.pubDate);
+                    const pubDate = new Date(pubDateStr);
                     const now = new Date();
                     const diffMins = Math.floor((now - pubDate) / 60000);
-                    if (diffMins < 60 && diffMins > 0) timeStr = `منذ ${diffMins} دقيقة`;
+                    if (diffMins < 60 && diffMins >= 0) timeStr = `منذ ${diffMins} دقيقة`;
                     else if (diffMins < 1440 && diffMins >= 60) timeStr = `منذ ${Math.floor(diffMins/60)} ساعة`;
-                    else timeStr = item.pubDate.split(' ')[0];
-
-                    // Optional: Call a translation API here, but we will leave title as is since it's english RSS, or we can use Yahoo Finance Arabic if available.
-                    // For now, English titles from Investing.com are fine, many traders read english news.
+                    else timeStr = "اليوم";
 
                     return {
                         time: timeStr,
