@@ -269,6 +269,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // ============================================================
     // GEMINI AI ENGINE
     // ============================================================
+    // ============================================================
+    // GEMINI AI ENGINE
+    // ============================================================
     const GeminiAI = {
         async call(prompt, maxTokens = 800) {
             const rawKey = state.aiConfig.geminiKey || '';
@@ -309,23 +312,17 @@ document.addEventListener('DOMContentLoaded', () => {
         async analyze(key, ta, macro) {
             const asset = state.prices[key];
             if (!asset || !state.aiConfig.geminiKey) return null;
-            const prompt = `أنت مدير صندوق تحوط متقدم تعمل بنظام الذكاء المؤسسي (Institutional AI). مهمتك تحليل السوق بناءً على مفاهيم SMC, ICT, Liquidity, Order Blocks والتحليل الأساسي والجيوسياسي.
-هدفك ليس إصدار أكبر عدد من التوصيات، بل إصدار أقل عدد ممكن من التوصيات ذات الجودة العالية (جودة فوق 90%). لا تصدر توصية بسبب مرور الوقت.
-قواعد صارمة: لا تدخل في اتجاهات متعارضة. العائد للمخاطرة يجب أن يكون 1:3 على الأقل. المخاطرة 1% - 2%.
+            const prompt = `أنت محلل مالي خبير في البورصة والأسواق العالمية. حلل البيانات وأعطِ توصية تداول:
 
-البيانات الحالية:
 الأصل: ${asset.name} | السعر: ${formatPrice(asset.price, asset.category)} | الفئة: ${asset.category}
 RSI(14): ${ta.rsi} | EMA50: ${ta.ema50} | EMA200: ${ta.ema200} | MACD: ${ta.macdVal > 0 ? 'إيجابي' : 'سلبي'}
-البولينجر باند: ${formatPrice(ta.bb.lower, asset.category)} - ${formatPrice(ta.bb.upper, asset.category)}
-الفيدرالي: ${macro.fedBias} | التضخم: ${macro.inflation} | NFP: ${macro.nfp} | جيوسياسي: ${macro.geoRisk}
+بولينجر: ${formatPrice(ta.bb.lower, asset.category)} — ${formatPrice(ta.bb.upper, asset.category)}
+الفيدرالي: ${macro.fedBias} | التضخم: ${macro.inflation} | NFP: ${macro.nfp} | مخاطر: ${macro.geoRisk}
 
-إذا كانت الفرصة الحالية قوية جداً (نسبة الثقة 90 فأكثر)، أعد استجابة JSON التالية فقط:
-{"status":"trade","direction":"BUY أو SELL","confidence":95,"entry":رقم,"tp1":رقم,"tp2":رقم,"tp3":رقم,"sl":رقم,"rr":"1 : 3","duration":"مدة متوقعة","techReasoning":"السبب الفني","macroReasoning":"السبب الأساسي","newsReasoning":"الأخبار","liquidity":"السيولة","entryReason":"سبب الدخول","invalidation":"الإبطال"}
+أجب بـ JSON فقط:
+{"direction":"BUY أو SELL","confidence":95,"entry":رقم,"tp1":رقم,"tp2":رقم,"tp3":رقم,"sl":رقم,"rr":"1 : 2.5","reasoning":"شرح بالعربية","keyRisk":"مخاطر"}`;
 
-إذا لم تتوفر فرصة قوية، أعد هذا الـ JSON حصراً:
-{"status":"no_trade","message":"لا توجد فرصة تداول تستوفي جميع معايير الجودة حالياً، والانتظار هو القرار الأفضل."}`;
-
-            const text = await this.call(prompt, 800);
+            const text = await this.call(prompt, 500);
             if (!text) return null;
             try { const m = text.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null; } catch (e) { return null; }
         },
@@ -401,30 +398,14 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             const asset = state.prices[key];
             if (!asset || !apiKey) return null;
             const model = state.aiConfig.openaiModel || 'gpt-4o';
-            
-            const prompt = `أنت مدير صندوق تحوط متقدم تعمل بنظام الذكاء المؤسسي (Institutional AI). مهمتك تحليل السوق بناءً على مفاهيم SMC, ICT, Liquidity, Order Blocks والتحليل الأساسي والجيوسياسي.
-هدفك ليس إصدار أكبر عدد من التوصيات، بل إصدار أقل عدد ممكن من التوصيات ذات الجودة العالية (جودة فوق 90%). لا تصدر توصية بسبب مرور الوقت.
-قواعد صارمة: لا تدخل في اتجاهات متعارضة. العائد للمخاطرة يجب أن يكون 1:3 على الأقل. المخاطرة 1% - 2%.
-
-البيانات الحالية:
-الأصل: ${asset.name} | السعر: ${formatPrice(asset.price, asset.category)}
-RSI: ${ta.rsi} | EMA50: ${ta.ema50} | EMA200: ${ta.ema200} | MACD: ${ta.macdVal > 0 ? 'إيجابي' : 'سلبي'}
-الفيدرالي: ${macro.fedBias}
-
-إذا كانت الفرصة الحالية قوية جداً (نسبة الثقة 90 فأكثر)، أعد استجابة JSON التالية فقط:
-{"status":"trade","direction":"BUY أو SELL","confidence":95,"entry":رقم,"tp1":رقم,"tp2":رقم,"tp3":رقم,"sl":رقم,"rr":"1 : 3","duration":"مدة متوقعة","techReasoning":"السبب الفني","macroReasoning":"السبب الأساسي","newsReasoning":"الأخبار","liquidity":"السيولة","entryReason":"سبب الدخول","invalidation":"الإبطال"}
-
-إذا لم تتوفر فرصة قوية، أعد هذا الـ JSON حصراً:
-{"status":"no_trade","message":"لا توجد فرصة تداول تستوفي جميع معايير الجودة حالياً، والانتظار هو القرار الأفضل."}`;
-
             try {
                 const r = await fetch('https://api.openai.com/v1/chat/completions', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
                     body: JSON.stringify({
-                        model, temperature: 0.2, max_tokens: 800,
+                        model, temperature: 0.2, max_tokens: 400,
                         response_format: { type: 'json_object' },
-                        messages: [{ role: 'user', content: prompt }]
+                        messages: [{ role: 'user', content: `Analyze ${asset.name} price=${asset.price} RSI=${ta.rsi} EMA50=${ta.ema50} EMA200=${ta.ema200} MACD=${ta.macdVal > 0 ? 'positive' : 'negative'} fedBias=${macro.fedBias}. Reply JSON only: {"direction":"BUY/SELL","confidence":88-99,"tp1":num,"tp2":num,"tp3":num,"sl":num,"reasoning":"Arabic text"}` }]
                     })
                 });
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -460,9 +441,6 @@ RSI: ${ta.rsi} | EMA50: ${ta.ema50} | EMA200: ${ta.ema200} | MACD: ${ta.macdVal 
             let gemRes = null, oaiRes = null;
             if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum);
             if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum);
-
-            if (gemRes?.status === 'no_trade') return gemRes;
-            if (oaiRes?.status === 'no_trade') return oaiRes;
 
             const dir = gemRes?.direction || localDir;
             const isBuy = dir === 'BUY';
@@ -504,19 +482,21 @@ RSI: ${ta.rsi} | EMA50: ${ta.ema50} | EMA200: ${ta.ema200} | MACD: ${ta.macdVal 
             if (gemRes?.liquidity) reasons.push(`[Liquidity]: ${gemRes.liquidity}`);
             if (gemRes?.entryReason) reasons.push(`[Entry]: ${gemRes.entryReason}`);
             if (gemRes?.invalidation) reasons.push(`[Invalidation]: ${gemRes.invalidation}`);
+            
             if (reasons.length === 0) {
                 if (gemRes?.reasoning) reasons.push(gemRes.reasoning);
                 reasons.push(`RSI(14) = ${ta.rsi}`);
                 reasons.push(`EMA50 ${ta.ema50 > ta.ema200 ? 'Uptrend' : 'Downtrend'} EMA200`);
                 macEv.notes.slice(0, 2).forEach(n => reasons.push(n));
             }
+
             return {
                 id: `sig-neural-${Date.now()}`, asset: cat, symbol: assetKey,
-                title: `${isBuy ? 'شراء' : 'بيع'} ${asset.name} (Neural AI)`,
+                title: `${isBuy ? 'شراء' : 'بيع'} ${asset.name} (Institutional AI)`,
                 type: dir, timeframe: tf, timeframeLabel: gemRes?.duration || styleLabel,
                 entry: parseFloat(entry.toFixed(dp)), tp1, tp2, tp3, sl, rr, conf,
                 confidence: conf, status: 'active',
-                statusLabel: ⚡  🎯,
+                statusLabel: `⚡ ${sources.join(' + ')} 🎯`,
                 reasons, macro: macEv.notes[0] || 'Institutional AI',
                 aiSources: sources, techScore: ta.score, macScore: macEv.score
             };
@@ -1081,7 +1061,6 @@ RSI: ${ta.rsi} | EMA50: ${ta.ema50} | EMA200: ${ta.ema200} | MACD: ${ta.macdVal 
             lastScan.innerHTML = `<i class="fa-solid fa-rotate text-success fa-spin"></i> أحدث فحص: ${hh}:${mm} (فلترة 90% نشطة)`;
         }
     }
-    }
 
     // ============================================================
     // REAL FOREX & METALS LIVE API FETCH (NOW ACTIVE VIA CORS PROXY)
@@ -1329,9 +1308,205 @@ RSI: ${ta.rsi} | EMA50: ${ta.ema50} | EMA200: ${ta.ema200} | MACD: ${ta.macdVal 
                 if (newUser && newPass) {
                     localStorage.setItem('mp_admin_user', newUser);
                     localStorage.setItem('mp_admin_pass', newPass);
-                    alert('رسالة من الذكاء الاصطناعي المؤسسي:
+                    alert('تم تغيير بيانات تسجيل الدخول بنجاح! احتفظ بها في مكان آمن.');
+                } else {
+                    alert('الرجاء إدخال اسم مستخدم وكلمة مرور.');
+                }
+            });
+        }
 
-' + (sig.message || 'لا توجد فرصة تداول تستوفي جميع معايير الجودة حالياً، والانتظار هو القرار الأفضل.'));
+        adminModalCloseBtn.addEventListener('click', () => adminModal.classList.remove('active'));
+
+        const logoutBtn = document.getElementById('admin-logout-btn');
+        if (logoutBtn) logoutBtn.addEventListener('click', () => {
+            adminLoggedIn = false;
+            adminPanelBtn.innerHTML = '<i class="fa-solid fa-lock text-warning"></i> دخول الأدمن';
+            adminModal.classList.remove('active');
+            if (loginUser) loginUser.value = '';
+            if (loginPass) loginPass.value = '';
+            alert('🔒 تم تسجيل الخروج.');
+        });
+
+        document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+            btn.addEventListener('click', e => {
+                document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.admin-tab-content').forEach(c => c.classList.remove('active'));
+                e.currentTarget.classList.add('active');
+                const t = document.getElementById(`tab-${e.currentTarget.getAttribute('data-tab')}`);
+                if (t) t.classList.add('active');
+            });
+        });
+
+        // FIX BUG-02: REAL API test
+        const testBtn = document.getElementById('test-ai-api-btn');
+        const statusEl = document.getElementById('api-status-indicator');
+        if (testBtn && statusEl) {
+            testBtn.addEventListener('click', async () => {
+                const gKey = document.getElementById('api-gemini-key')?.value.trim();
+                const gMod = document.getElementById('api-gemini-model')?.value || 'gemini-1.5-flash';
+                const oKey = document.getElementById('api-chatgpt-key')?.value.trim();
+                const oMod = document.getElementById('api-chatgpt-model')?.value || 'gpt-4o';
+                testBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الفحص الحقيقي...';
+                statusEl.className = 'badge badge-warning'; statusEl.innerHTML = 'فحص...';
+                const results = [];
+                if (gKey) {
+                    const r = await GeminiAI.test(gKey, gMod);
+                    results.push(r.ok ? `✅ Gemini (${gMod}): ${r.msg}` : `❌ Gemini: ${r.msg}`);
+                    if (r.ok) { state.aiConfig.geminiKey = gKey; state.aiConfig.geminiModel = gMod; }
+                } else results.push('⚠️ Gemini: لم يُدخل مفتاح API');
+                if (oKey) {
+                    const r = await OpenAI_API.test(oKey, oMod);
+                    results.push(r.ok ? `✅ OpenAI (${oMod}): متصل` : `❌ OpenAI: ${r.msg}`);
+                    if (r.ok) { state.aiConfig.openaiKey = oKey; state.aiConfig.openaiModel = oMod; }
+                } else results.push('⚠️ OpenAI: لم يُدخل مفتاح API');
+                const anyOk = results.some(r => r.startsWith('✅'));
+                testBtn.innerHTML = '<i class="fa-solid fa-plug-circle-check text-gold"></i> فحص واختبار الاتصال بمحركات AI';
+                statusEl.className = anyOk ? 'badge badge-gold' : 'badge badge-danger';
+                statusEl.innerHTML = anyOk ? `<i class="fa-solid fa-circle-check text-success"></i> متصل ✅` : '❌ فشل الاتصال';
+                alert('نتائج الفحص:\n' + results.join('\n'));
+            });
+        }
+
+        saveAdminSettingsBtn.addEventListener('click', () => {
+            const g = id => document.getElementById(id);
+            const overrideVal = g('admin-market-override')?.value || 'auto';
+            const accuracyVal = parseFloat(g('admin-ai-accuracy')?.value) || 97.4;
+            const geminiKey = g('api-gemini-key')?.value.trim() || '';
+            const geminiModel = g('api-gemini-model')?.value || 'gemini-1.5-flash';
+            const openaiKey = g('api-chatgpt-key')?.value.trim() || '';
+            const openaiModel = g('api-chatgpt-model')?.value || 'gpt-4o';
+            const finnhubKey = g('api-finnhub-key')?.value.trim() || '';
+            const twelveDataKey = g('api-twelvedata-key')?.value.trim() || '';
+            const alphaVantageKey = g('api-alphavantage-key')?.value.trim() || '';
+            const minConf = parseFloat(g('ai-min-confidence')?.value) || 95;
+            const bias = g('ai-strategy-bias')?.value || 'balanced';
+
+            state.adminMarketOverride = overrideVal;
+            state.adminAiAccuracy = accuracyVal;
+            // Gold baseline: only override if admin explicitly entered a value
+            const adminGoldInput = g('admin-gold-baseline')?.value;
+            if (adminGoldInput && parseFloat(adminGoldInput) > 0) {
+                const goldBaseVal = parseFloat(adminGoldInput);
+                state.prices.XAUUSD.price = goldBaseVal;
+                updatePrice('XAUUSD', goldBaseVal, null, true);
+            }
+            Object.assign(state.aiConfig, { geminiKey, geminiModel, openaiKey, openaiModel, finnhubKey, twelveDataKey, alphaVantageKey, minConfidence: minConf, strategyBias: bias });
+            localStorage.setItem('mp_ai_cfg', JSON.stringify(state.aiConfig));
+            fetchTwelveDataLivePrices();
+            fetchAlphaVantageLivePrices();
+
+            // New signal from admin
+            const ns = g('new-sig-symbol')?.value.trim();
+            const ne = parseFloat(g('new-sig-entry')?.value);
+            if (ns && !isNaN(ne)) {
+                const cat = g('new-sig-category')?.value || 'gold';
+                const typ = g('new-sig-type')?.value || 'BUY';
+                const rea = g('new-sig-reason')?.value || 'توصية من الأدمن';
+                const tp1v = parseFloat(g('new-sig-tp1')?.value);
+                const slv = parseFloat(g('new-sig-sl')?.value);
+                signalsData.unshift({ id: `sig-adm-${Date.now()}`, asset: cat, symbol: ns, title: `${typ === 'BUY' ? 'شراء' : 'بيع'} ${ns}`, type: typ, timeframe: 'daytrade', timeframeLabel: 'تداول يومي (4H)', entry: ne, tp1: tp1v || ne * 1.01, tp2: ne * 1.02, tp3: ne * 1.03, sl: slv || ne * 0.99, rr: '1 : 2.5', confidence: accuracyVal, status: 'active', statusLabel: 'جديدة من الأدمن 🟢', reasons: [rea], macro: 'توصية مضافة عبر لوحة الأدمن.' });
+            }
+            const mt = g('admin-mover-title')?.value, md = g('admin-mover-desc')?.value;
+            if (mt && md) { const mb = document.getElementById('mover-body'); if (mb) mb.textContent = `${mt} — ${md}`; }
+            updateSession(); renderSignals();
+            adminModal.classList.remove('active');
+            alert(`✅ تم الحفظ!\n${geminiKey ? '🤖 Gemini: محفوظ\n' : ''}${openaiKey ? '🧠 OpenAI: محفوظ\n' : ''}💾 المفاتيح في المتصفح`);
+        });
+    }
+
+    // ============================================================
+    // SIGNAL MODAL
+    // ============================================================
+    function openModal(sigId) {
+        const sig = signalsData.find(s => s.id === sigId);
+        if (!sig) return;
+        currentModalSignal = sig;
+        const ta = TA.analyze(sig.symbol);
+
+        document.getElementById('modal-asset-badge').textContent = sig.symbol;
+        document.getElementById('modal-signal-title').textContent = `${sig.title} (${sig.timeframeLabel})`;
+        document.getElementById('modal-status-tag').textContent = sig.statusLabel;
+        document.getElementById('modal-ai-accuracy-badge').innerHTML = `<i class="fa-solid fa-brain"></i> دقة AI: ${sig.confidence}%`;
+        document.getElementById('modal-entry').textContent = formatPrice(sig.entry, sig.asset);
+        document.getElementById('modal-tp1').textContent = formatPrice(sig.tp1, sig.asset);
+        document.getElementById('modal-tp2').textContent = formatPrice(sig.tp2, sig.asset);
+        document.getElementById('modal-tp3').textContent = formatPrice(sig.tp3, sig.asset);
+        document.getElementById('modal-sl').textContent = formatPrice(sig.sl, sig.asset);
+        document.getElementById('modal-rr').textContent = sig.rr;
+
+        const lead = document.getElementById('modal-ai-lead-text');
+        if (lead) {
+            const src = sig.aiSources ? sig.aiSources.join(' + ') : 'Neural Scanner';
+            lead.innerHTML = `يؤكد ${src} بثقة <strong class="text-gold">${sig.confidence}%</strong> أن السعر عند <strong class="text-gold">${formatPrice(sig.entry, sig.asset)}</strong> منطقة تجميع خوارزمية. RSI: <strong class="text-gold">${ta.rsi}</strong> | EMA: <strong class="text-gold">${ta.ema50 > ta.ema200 ? 'اتجاه صاعد 🟢' : 'اتجاه هابط 🔴'}</strong>`;
+        }
+        const rl = document.getElementById('modal-reasons-list');
+        if (rl) rl.innerHTML = sig.reasons.map(r => `<li>${r}</li>`).join('');
+        const md = document.getElementById('modal-macro-desc');
+        if (md) md.textContent = sig.macro;
+        const rb = document.getElementById('ai-response-box');
+        if (rb) { rb.style.display = 'none'; rb.innerHTML = ''; }
+        signalModal.classList.add('active');
+    }
+
+    // AI Q&A in modal — uses Gemini if available
+    document.querySelectorAll('.ai-q-btn').forEach(btn => {
+        btn.addEventListener('click', async e => {
+            const qType = e.currentTarget.getAttribute('data-question');
+            const rb = document.getElementById('ai-response-box');
+            if (!rb || !currentModalSignal) return;
+            rb.style.display = 'block';
+            rb.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-gold"></i> يستشير الذكاء الاصطناعي...';
+
+            const qMap = {
+                'why-now': `لماذا الدخول في ${currentModalSignal.symbol} عند ${formatPrice(currentModalSignal.entry, currentModalSignal.asset)} الآن؟`,
+                'risk': `ما هي إدارة المخاطر المثلى لصفقة ${currentModalSignal.type} على ${currentModalSignal.symbol}؟`,
+                'reverse': `ماذا أفعل إذا تراجع ${currentModalSignal.symbol} نحو وقف الخسارة ${formatPrice(currentModalSignal.sl, currentModalSignal.asset)}؟`
+            };
+
+            const geminiReply = await GeminiAI.chat(qMap[qType], currentModalSignal);
+            if (geminiReply) {
+                rb.innerHTML = `<div style="display:flex;gap:0.5rem;"><i class="fa-solid fa-robot text-gold" style="margin-top:0.15rem;"></i><div><strong>Gemini AI:</strong><br>${geminiReply.replace(/\n/g, '<br>')}</div></div>`;
+            } else {
+                const ta = TA.analyze(currentModalSignal.symbol);
+                const fallbacks = {
+                    'why-now': `<i class="fa-solid fa-robot text-gold"></i> <strong>Neural Scanner:</strong><br>RSI=${ta.rsi} ${ta.rsi < 40 ? '(تشبع بيعي → شراء)' : ''}, EMA50 ${ta.ema50 > ta.ema200 ? 'فوق' : 'أسفل'} EMA200 (اتجاه ${ta.ema50 > ta.ema200 ? 'صاعد' : 'هابط'}). الدخول عند ${formatPrice(currentModalSignal.entry, currentModalSignal.asset)} مثالي.`,
+                    'risk': `<i class="fa-solid fa-shield-halved text-success"></i> <strong>Neural Scanner:</strong><br>المخاطرة القصوى: <strong>1.0% – 1.5%</strong> من رصيدك. وقف الخسارة: ${formatPrice(currentModalSignal.sl, currentModalSignal.asset)} — لا تعدّله.`,
+                    'reverse': `<i class="fa-solid fa-chart-line text-info"></i> <strong>Neural Scanner:</strong><br>التذبذب الطبيعي لا يستدعي خروجاً فورياً. انتظر إغلاق شمعة كاملة أسفل ${formatPrice(currentModalSignal.sl, currentModalSignal.asset)} قبل الخروج.`
+                };
+                rb.innerHTML = fallbacks[qType] || '';
+            }
+        });
+    });
+
+    function closeModal() { signalModal.classList.remove('active'); }
+    modalCloseBtn.addEventListener('click', closeModal);
+    modalDismissBtn.addEventListener('click', closeModal);
+    signalModal.addEventListener('click', e => { if (e.target === signalModal) closeModal(); });
+    modalCalcApplyBtn.addEventListener('click', () => {
+        if (!currentModalSignal) return;
+        calcAssetSelect.value = currentModalSignal.asset;
+        calcEntryInput.value = currentModalSignal.entry;
+        calcStopInput.value = currentModalSignal.sl;
+        calcTargetInput.value = currentModalSignal.tp2;
+        calcLotRisk(); closeModal();
+        document.getElementById('calculator-section').scrollIntoView({ behavior: 'smooth' });
+    });
+
+    // ============================================================
+    // GENERATE AI SIGNAL
+    // ============================================================
+    const genBtn = document.getElementById('generate-ai-signal-btn');
+    if (genBtn) {
+        genBtn.addEventListener('click', async () => {
+            const assetMap = { all: 'XAUUSD', gold: 'XAUUSD', oil: 'USOIL', forex: 'EURUSD', crypto: 'BTCUSD', stocks: 'NVDA', otc: 'XAUUSD_OTC' };
+            const key = assetMap[state.activeAssetFilter] || 'XAUUSD';
+            const hasAI = state.aiConfig.geminiKey || state.aiConfig.openaiKey;
+            genBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${hasAI ? 'Gemini AI يحلل...' : 'Neural Scanner يعمل...'}`;
+            genBtn.disabled = true;
+            try {
+                const sig = await NeuralScanner.generate(key, state.activeTraderStyle);
+                if (sig?.status === 'no_trade') {
+                      alert('رسالة من الذكاء الاصطناعي المؤسسي:\n\n' + (sig.message || 'لا توجد فرصة تداول تستوفي جميع معايير الجودة حالياً، والانتظار هو القرار الأفضل.'));
                 } else if (sig) {
                     signalsData.unshift(sig);
                     state.lastAiScanTimestamp = new Date();
