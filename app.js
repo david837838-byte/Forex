@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
         adminMarketOverride: 'auto',
         adminAiAccuracy: 97.4,
         favorites: JSON.parse(localStorage.getItem('mp_favorites') || '[]'),
+        fedData: JSON.parse(localStorage.getItem('mp_fedData') || '{"rate":"5.50%", "exp":"تثبيت (88%)", "cpi":"3.0% (إيجابي للدولار)", "nfp":"+206K (قوي)"}'),
         prices: {
             XAUUSD: { name: 'الذهب (XAUUSD)', price: 0, basePrice: 0, change: '--%', isUp: true, category: 'gold' },
             XAGUSD: { name: 'الفضة (XAGUSD)', price: 0, basePrice: 0, change: '--%', isUp: true, category: 'gold' },
@@ -127,10 +128,65 @@ document.addEventListener('DOMContentLoaded', () => {
         { id: 'sig-link', asset: 'crypto', symbol: 'LINK/USD', title: 'شراء تشين لينك (Chainlink)', type: 'BUY', timeframe: 'swing', timeframeLabel: 'تداول 24/7 (Daily)', entry: 13.15, tp1: 14.50, tp2: 16.00, tp3: 18.00, sl: 12.30, rr: '1 : 2.76', confidence: 96.6, status: 'active', statusLabel: 'بث حي (+$0.65)', reasons: ['اعتماد بروتوكول CCIP لتجميع البيانات المالية.', 'طلب مؤسسي قوي على أوراكل AI.'], macro: 'ريادة تشين لينك في ربط العقود بالبيانات الخارجية.' }
     ];
 
-    let newsData = [
-        { time: 'اليوم', title: 'الذهب يغلق فوق 4,000$ التاريخية عند 4,015.50$ للأونصة', sentiment: 'صعود تاريخي للذهب 🟢', sentimentType: 'gold-up', impact: 'عالي التأثير جداً', impactClass: 'badge-live' },
-        { time: 'منذ ساعتين', title: 'إنفيديا وداو جونز يسجلان أرباحاً بدعم من قطاع الذكاء الاصطناعي', sentiment: 'إيجابي للأسهم 🟢', sentimentType: 'gold-up', impact: 'عالي التأثير', impactClass: 'badge-warning' }
-    ];
+    let newsData = [];
+
+    async function fetchLiveNews() {
+        try {
+            // Using rss2json free API to convert Investing.com Forex news RSS
+            const rssUrl = encodeURIComponent('https://www.investing.com/rss/news_285.rss');
+            const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${rssUrl}`);
+            const data = await res.json();
+            if (data.status === 'ok') {
+                newsData = data.items.slice(0, 6).map(item => {
+                    let title = item.title;
+                    let sentiment = 'أخبار عامة (AI)';
+                    let sentimentType = 'neutral';
+                    let impact = 'متوسط';
+                    let impactClass = 'badge-warning';
+
+                    const tLower = title.toLowerCase();
+                    if(tLower.includes('gold') || tLower.includes('xau')) { sentiment = 'مرتبط بالذهب'; sentimentType = 'gold-up'; }
+                    else if(tLower.includes('usd') || tLower.includes('fed') || tLower.includes('rate')) { sentiment = 'مؤثر للدولار'; sentimentType = 'bearish'; impact = 'عالي التأثير'; impactClass = 'badge-live'; }
+                    else if(tLower.includes('eur') || tLower.includes('ecb')) { sentiment = 'مرتبط باليورو'; sentimentType = 'bullish'; }
+                    else if(tLower.includes('oil') || tLower.includes('wti')) { sentiment = 'مرتبط بالنفط'; sentimentType = 'bullish'; }
+
+                    if(tLower.includes('surge') || tLower.includes('jump') || tLower.includes('rally') || tLower.includes('plunge') || tLower.includes('crash')) {
+                        impact = 'عالي التأثير جداً'; impactClass = 'badge-live';
+                    }
+
+                    // Relative time
+                    let timeStr = 'اليوم';
+                    const pubDate = new Date(item.pubDate);
+                    const now = new Date();
+                    const diffMins = Math.floor((now - pubDate) / 60000);
+                    if (diffMins < 60 && diffMins > 0) timeStr = `منذ ${diffMins} دقيقة`;
+                    else if (diffMins < 1440 && diffMins >= 60) timeStr = `منذ ${Math.floor(diffMins/60)} ساعة`;
+                    else timeStr = item.pubDate.split(' ')[0];
+
+                    // Optional: Call a translation API here, but we will leave title as is since it's english RSS, or we can use Yahoo Finance Arabic if available.
+                    // For now, English titles from Investing.com are fine, many traders read english news.
+
+                    return {
+                        time: timeStr,
+                        title: title,
+                        sentiment: sentiment,
+                        sentimentType: sentimentType,
+                        impact: impact,
+                        impactClass: impactClass
+                    };
+                });
+                renderNews();
+            }
+        } catch (e) {
+            console.error("Live news fetch failed", e);
+        }
+    }
+    
+    // Call it immediately
+    fetchLiveNews();
+    // Refresh news every 30 mins
+    setInterval(fetchLiveNews, 30 * 60 * 1000);
+
 
     // ============================================================
     // DOM REFERENCES
@@ -1675,6 +1731,67 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             const originalText = favModalSave.innerHTML;
             favModalSave.innerHTML = '<i class="fa-solid fa-check"></i> تم الحفظ';
             setTimeout(() => { favModalSave.innerHTML = originalText; }, 1500);
+        });
+    }
+
+    
+    // ============================================================
+    // FED WATCH EDIT LOGIC
+    // ============================================================
+    const fedModal = document.getElementById('fed-modal');
+    const fedEditBtn = document.getElementById('fed-edit-btn');
+    const fedModalClose = document.getElementById('fed-modal-close-btn');
+    const fedModalSave = document.getElementById('fed-modal-save-btn');
+    
+    // UI Elements
+    const fedRateVal = document.getElementById('fed-rate-val');
+    const fedExpVal = document.getElementById('fed-exp-val');
+    const fedCpiVal = document.getElementById('fed-cpi-val');
+    const fedNfpVal = document.getElementById('fed-nfp-val');
+
+    // Inputs
+    const fedEditRate = document.getElementById('fed-edit-rate');
+    const fedEditExp = document.getElementById('fed-edit-exp');
+    const fedEditCpi = document.getElementById('fed-edit-cpi');
+    const fedEditNfp = document.getElementById('fed-edit-nfp');
+
+    function renderFedData() {
+        if(fedRateVal) fedRateVal.textContent = state.fedData.rate;
+        if(fedExpVal) fedExpVal.textContent = state.fedData.exp;
+        if(fedCpiVal) fedCpiVal.textContent = state.fedData.cpi;
+        if(fedNfpVal) fedNfpVal.textContent = state.fedData.nfp;
+    }
+    renderFedData(); // Initial render
+
+    if (fedEditBtn) {
+        fedEditBtn.addEventListener('click', () => {
+            if(fedEditRate) fedEditRate.value = state.fedData.rate;
+            if(fedEditExp) fedEditExp.value = state.fedData.exp;
+            if(fedEditCpi) fedEditCpi.value = state.fedData.cpi;
+            if(fedEditNfp) fedEditNfp.value = state.fedData.nfp;
+            if(fedModal) fedModal.classList.add('active');
+        });
+    }
+    if (fedModalClose) {
+        fedModalClose.addEventListener('click', () => {
+            if(fedModal) fedModal.classList.remove('active');
+        });
+    }
+    if (fedModalSave) {
+        fedModalSave.addEventListener('click', () => {
+            state.fedData = {
+                rate: fedEditRate ? fedEditRate.value : '',
+                exp: fedEditExp ? fedEditExp.value : '',
+                cpi: fedEditCpi ? fedEditCpi.value : '',
+                nfp: fedEditNfp ? fedEditNfp.value : ''
+            };
+            localStorage.setItem('mp_fedData', JSON.stringify(state.fedData));
+            renderFedData();
+            if(fedModal) fedModal.classList.remove('active');
+            
+            const originalText = fedModalSave.innerHTML;
+            fedModalSave.innerHTML = '<i class="fa-solid fa-check"></i> تم الحفظ';
+            setTimeout(() => { fedModalSave.innerHTML = originalText; }, 1500);
         });
     }
 

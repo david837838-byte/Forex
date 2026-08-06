@@ -399,18 +399,18 @@
                     <!-- Federal Reserve Watch Widget -->
                     <div class="card sidebar-card fed-card">
                         <div class="card-header">
-                            <h4><i class="fa-solid fa-landmark text-gold"></i> مرصد الفيدرالي الأمريكي (FED Watch)</h4>
+                            <h4><i class="fa-solid fa-landmark text-gold"></i> مرصد الفيدرالي الأمريكي (FED Watch)</h4> <button id="fed-edit-btn" class="btn btn-outline" style="padding:0.2rem 0.5rem; font-size:0.8rem; margin-right:auto;"><i class="fa-solid fa-pen"></i></button>
                             <span class="badge badge-live">تحديث فورياً</span>
                         </div>
                         <div class="card-body">
                             <div class="fed-rate-display">
                                 <div class="rate-box">
                                     <span class="rate-label">الفائدة الحالية</span>
-                                    <span class="rate-val">5.50%</span>
+                                    <span class="rate-val" id="fed-rate-val">5.50%</span>
                                 </div>
                                 <div class="rate-box highlight">
                                     <span class="rate-label">توقع الاجتماع القادم</span>
-                                    <span class="rate-val text-gold">تثبيت (88%)</span>
+                                    <span class="rate-val text-gold" id="fed-exp-val">تثبيت (88%)</span>
                                 </div>
                             </div>
 
@@ -428,11 +428,11 @@
                             <div class="fed-stats-list">
                                 <div class="fed-stat-item">
                                     <span class="stat-name">مؤشر أسعار المستهلك (CPI):</span>
-                                    <span class="stat-value text-warning">3.0% (إيجابي للدولار)</span>
+                                    <span class="stat-value text-warning" id="fed-cpi-val">3.0% (إيجابي للدولار)</span>
                                 </div>
                                 <div class="fed-stat-item">
                                     <span class="stat-name">وظائف غير الزراعيين (NFP):</span>
-                                    <span class="stat-value text-success">+206K (قوي)</span>
+                                    <span class="stat-value text-success" id="fed-nfp-val">+206K (قوي)</span>
                                 </div>
                                 <div class="fed-stat-item">
                                     <span class="stat-name">تأثير الفيدرالي على الذهب:</span>
@@ -693,6 +693,37 @@
             <div class="modal-footer" style="margin-top: 1.5rem; display: flex; justify-content: flex-end; gap: 1rem;">
                 <button class="btn btn-outline" id="fav-modal-dismiss-btn">إلغاء</button>
                 <button class="btn btn-primary" id="fav-modal-save-btn">حفظ المفضلات</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- FED Watch Edit Modal -->
+    <div class="modal-overlay" id="fed-modal">
+        <div class="modal-card" style="max-width: 400px;">
+            <button class="modal-close" id="fed-modal-close-btn">&times;</button>
+            <div class="modal-header" style="border-bottom: 1px solid rgba(255,215,0,0.2); padding-bottom: 1rem; margin-bottom: 1rem;">
+                <h3 style="color:var(--gold); margin:0;"><i class="fa-solid fa-landmark"></i> تحديث مرصد الفيدرالي</h3>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 1rem;">
+                <div>
+                    <label>الفائدة الحالية</label>
+                    <input type="text" id="fed-edit-rate" class="calc-input" value="5.50%">
+                </div>
+                <div>
+                    <label>توقع الاجتماع القادم</label>
+                    <input type="text" id="fed-edit-exp" class="calc-input" value="تثبيت (88%)">
+                </div>
+                <div>
+                    <label>التضخم (CPI)</label>
+                    <input type="text" id="fed-edit-cpi" class="calc-input" value="3.0% (إيجابي للدولار)">
+                </div>
+                <div>
+                    <label>الوظائف (NFP)</label>
+                    <input type="text" id="fed-edit-nfp" class="calc-input" value="+206K (قوي)">
+                </div>
+            </div>
+            <div class="modal-footer" style="margin-top: 1.5rem; display: flex; justify-content: flex-end; gap: 1rem;">
+                <button class="btn btn-primary" id="fed-modal-save-btn" style="width: 100%;">حفظ التحديثات</button>
             </div>
         </div>
     </div>
