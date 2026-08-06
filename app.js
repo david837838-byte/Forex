@@ -1556,79 +1556,8 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     });
 
     // ============================================================
-    // GENERATE AI SIGNAL
+    // (Old Generate AI Signal Listener Removed)
     // ============================================================
-    const genBtn = document.getElementById('generate-ai-signal-btn');
-    if (genBtn) {
-        genBtn.addEventListener('click', async () => {
-            const hasAI = state.aiConfig.geminiKey || state.aiConfig.openaiKey;
-            
-            let keysToScan = [];
-            if (state.activeAssetFilter === 'all') {
-                keysToScan = Object.keys(state.prices);
-                // Limit to top 5 volatile/moving assets to prevent API rate limits if 'all' is selected
-                keysToScan = keysToScan.sort((a,b) => Math.abs(state.prices[b].change) - Math.abs(state.prices[a].change)).slice(0, 5);
-            } else if (state.activeAssetFilter === 'favorites') {
-                keysToScan = [...state.favorites];
-                if (keysToScan.length === 0) { alert('لم تقم بإضافة أي أسواق للمفضلة حتى الآن! اضغط على زر "إدارة المفضلات" لاختيار أسواقك.'); return; }
-            } else {
-                keysToScan = Object.keys(state.prices).filter(k => state.prices[k].category === (state.activeAssetFilter === 'metals' ? 'gold' : state.activeAssetFilter));
-                // Handle OTC special case or if active filter doesn't map directly
-                if (keysToScan.length === 0 && state.activeAssetFilter === 'otc') keysToScan = ['XAUUSD_OTC', 'EURUSD_OTC', 'GBPUSD_OTC'];
-                if (keysToScan.length === 0) keysToScan = ['XAUUSD']; // fallback
-            }
-
-            genBtn.disabled = true;
-            let generatedCount = 0;
-            let noTradeReasons = [];
-
-            try {
-                for (let i = 0; i < keysToScan.length; i++) {
-                    const key = keysToScan[i];
-                    const assetName = state.prices[key]?.name || key;
-                    genBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${hasAI ? 'Gemini AI' : 'Neural Scanner'} يحلل ${assetName} (${i+1}/${keysToScan.length})...`;
-                    
-                    const sig = await NeuralScanner.generate(key, state.activeTraderStyle);
-                    
-                    if (sig?.status === 'no_trade') {
-                        if (sig.message) noTradeReasons.push(`${assetName}: ${sig.message}`);
-                    } else if (sig) {
-                        signalsData.unshift(sig);
-                        generatedCount++;
-                    }
-                    
-                    // Small delay between API calls to prevent Rate Limits (429) if using Gemini/OpenAI
-                    if (hasAI && i < keysToScan.length - 1) {
-                        await new Promise(r => setTimeout(r, 2000));
-                    }
-                }
-                
-                state.lastAiScanTimestamp = new Date();
-                if (lastScanTimeEl) lastScanTimeEl.innerHTML = '<i class="fa-solid fa-clock-rotate-left"></i> آخر مسح: الآن';
-                renderSignals();
-                
-                if (generatedCount > 0) {
-                    // Scroll to first new card
-                    const firstCard = document.querySelector('.signal-card');
-                    if (firstCard) { 
-                        firstCard.scrollIntoView({ behavior: 'smooth', block: 'center' }); 
-                        firstCard.style.boxShadow = '0 0 35px rgba(255,215,0,0.7)'; 
-                        setTimeout(() => { firstCard.style.boxShadow = ''; }, 3000); 
-                    }
-                    alert(`✅ تم العثور على ${generatedCount} فرصة تداول عالية الجودة والتوافق المؤسسي.`);
-                } else {
-                    alert('رسالة من الذكاء الاصطناعي المؤسسي:\\n\\nلا توجد أي فرص تداول تستوفي معايير الجودة الصارمة في هذه القائمة حالياً.\\n\\n' + (noTradeReasons.length > 0 ? noTradeReasons[0] : 'الانتظار هو القرار الأفضل.'));
-                }
-                
-            } catch (err) { 
-                console.error(err); 
-                alert('حدث خطأ أثناء الاتصال. يرجى التأكد من مفاتيح API الخاصة بك.'); 
-            }
-            
-            genBtn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> توليد توصيات AI ذكية';
-            genBtn.disabled = false;
-        });
-    }
 
     if (triggerAiScanBtn) {
         triggerAiScanBtn.addEventListener('click', async () => {
@@ -1822,7 +1751,6 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     // ============================================================
     // COOLDOWN TIMER LOGIC FOR SIGNAL GENERATION
     // ============================================================
-    const aiGenBtnRef = document.getElementById('generate-ai-signal-btn');
     const COOLDOWN_MINUTES = 10;
     const COOLDOWN_MS = COOLDOWN_MINUTES * 60 * 1000;
     let timerInterval = null;
@@ -1831,19 +1759,20 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         const lastGen = parseInt(localStorage.getItem('mp_lastGenTime')) || 0;
         const now = Date.now();
         const diff = now - lastGen;
+        const btn = document.getElementById('generate-ai-signal-btn');
 
         if (diff < COOLDOWN_MS) {
             const remaining = COOLDOWN_MS - diff;
             const mins = Math.floor(remaining / 60000);
             const secs = Math.floor((remaining % 60000) / 1000);
-            if (aiGenBtnRef) {
-                aiGenBtnRef.disabled = true;
-                aiGenBtnRef.innerHTML = `<i class="fa-solid fa-bolt"></i> تحديث (${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')})`;
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<i class="fa-solid fa-bolt"></i> تحديث (${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')})`;
             }
         } else {
-            if (aiGenBtnRef) {
-                aiGenBtnRef.disabled = false;
-                aiGenBtnRef.innerHTML = `<i class="fa-solid fa-bolt"></i> توليد توصيات AI ذكية`;
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fa-solid fa-bolt"></i> توليد توصيات AI ذكية`;
             }
             if (timerInterval) {
                 clearInterval(timerInterval);
@@ -1852,26 +1781,18 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         }
     }
 
+    const aiGenBtnRef = document.getElementById('generate-ai-signal-btn');
     if (aiGenBtnRef) {
-        // OVERRIDE the old genBtn listener
-        const newGenBtn = aiGenBtnRef.cloneNode(true);
-        aiGenBtnRef.parentNode.replaceChild(newGenBtn, aiGenBtnRef);
-        
-        newGenBtn.addEventListener('click', () => {
+        aiGenBtnRef.addEventListener('click', () => {
             const lastGen = parseInt(localStorage.getItem('mp_lastGenTime')) || 0;
             const now = Date.now();
             if (now - lastGen >= COOLDOWN_MS) {
                 localStorage.setItem('mp_lastGenTime', now);
                 
-                const origHtml = newGenBtn.innerHTML;
-                newGenBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري التحليل الصارم...';
+                aiGenBtnRef.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري التحليل الصارم...';
                 
                 setTimeout(() => {
                     generateAISignals();
-                    // We must manually grab it again because we cloned it
-                    const currentGenBtn = document.getElementById('generate-ai-signal-btn');
-                    if (currentGenBtn) currentGenBtn.disabled = true;
-                    
                     if (timerInterval) clearInterval(timerInterval);
                     timerInterval = setInterval(updateCooldownUI, 1000);
                     updateCooldownUI();
