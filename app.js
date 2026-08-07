@@ -1091,7 +1091,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         }
 
         filtered.forEach(sig => {
-            const isBuy = sig.type === 'buy';
+            const isBuy = sig.type.toLowerCase() === 'buy';
             const typeClass = isBuy ? 'type-buy' : 'type-sell';
             const typeLabel = isBuy ? 'شراء (Buy)' : 'بيع (Sell)';
             const typeIcon = isBuy ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down';
@@ -1726,10 +1726,10 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     }
 
     // ============================================================
-    // COOLDOWN TIMER LOGIC FOR SIGNAL GENERATION
+    // COOLDOWN TIMER LOGIC FOR SIGNAL GENERATION (REMOVED AS PER USER REQUEST)
     // ============================================================
-    const COOLDOWN_MINUTES = 10;
-    const COOLDOWN_MS = COOLDOWN_MINUTES * 60 * 1000;
+    const COOLDOWN_MINUTES = 0;
+    const COOLDOWN_MS = 0;
     let timerInterval = null;
 
     function updateCooldownUI() {
