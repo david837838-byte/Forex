@@ -395,6 +395,7 @@ Return ONLY valid JSON format:
 
             const isBuy = dir === 'BUY';
             let conf = gemRes?.confidence || ta.score;
+            if (gemRes && gemRes.direction === localDir) conf = Math.max(conf, ta.score);
             if (gemRes && oaiRes && oaiRes.direction === dir) conf = Math.min(99.9, conf + 15);
             conf = parseFloat(conf.toFixed(1));
 
