@@ -1939,9 +1939,9 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         }
     };
 
-    function autoRefreshSignalsEveryMinute() {
+    async function autoRefreshSignalsEveryMinute() {
         updatePnL();
-        fetchMacroAndNews(); generateAISignals();
+        await fetchMacroAndNews(); await generateAISignals();
         renderSignals();
         const lastScan = document.getElementById('last-scan-time');
         if (lastScan) {
@@ -1963,7 +1963,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     setInterval(updateSession, 1000);
     setInterval(fetchPythonYFinancePrices, 1000); // 1-second TradingView CORS Proxy refresh (real-time)
     setInterval(fetchCrypto, 1000); // 1-second Binance Live Crypto Refresh
-    setInterval(autoRefreshSignalsEveryMinute, 600000); // 10-minute automatic AI signal refresh
+    setInterval(autoRefreshSignalsEveryMinute, 60000); // 10-minute automatic AI signal refresh
     startStream();
 
     updateSession(); updateTicker(); renderSignals(); renderNews(); renderCalendar();
