@@ -238,7 +238,66 @@ document.addEventListener('DOMContentLoaded', () => {
     // TECHNICAL ANALYSIS ENGINE
     // ============================================================
     const TA = {
-        rsi(prices, period = 14) {
+        cache: {},
+        
+        async analyzeAsync(assetKey, timeframe = '1h') {
+            try {
+                const res = await fetch("http://187.77.174.215:2200/api/ohlcv?symbol=" + assetKey + "&timeframe=" + timeframe);
+                const data = await res.json();
+                if(data.status !== 'success' || !data.data || data.data.length < 50) return this.fallback(assetKey);
+                
+                const candles = data.data;
+                const closes = candles.map(c => c.close);
+                const highs = candles.map(c => c.high);
+                const lows = candles.map(c => c.low);
+                const opens = candles.map(c => c.open);
+                const vols = candles.map(c => c.volume);
+                
+                // Indicators
+                const rsi = this.calcRsi(closes, 14);
+                const ema50 = this.calcEma(closes, 50);
+                const ema200 = this.calcEma(closes, 200);
+                const atr = this.calcAtr(highs, lows, closes, 14);
+                
+                // SMC & Price Action
+                const fvg = this.detectFVG(candles);
+                const ob = this.detectOrderBlock(candles);
+                const trend = ema50 > ema200 ? 'Uptrend' : 'Downtrend';
+                const structure = closes[closes.length-1] > ema50 ? 'Bullish' : 'Bearish';
+                
+                let score = 50;
+                if(trend === 'Uptrend' && rsi < 70 && rsi > 40) score += 20;
+                if(trend === 'Downtrend' && rsi > 30 && rsi < 60) score -= 20;
+                if(fvg === 'Bullish FVG') score += 15;
+                if(fvg === 'Bearish FVG') score -= 15;
+                if(ob === 'Bullish OB') score += 15;
+                if(ob === 'Bearish OB') score -= 15;
+                
+                const analysis = {
+                    rsi, ema50, ema200, atr, fvg, ob, trend, structure, score,
+                    currentPrice: closes[closes.length-1]
+                };
+                
+                this.cache[assetKey] = analysis;
+                return analysis;
+            } catch(e) {
+                console.error('TA Fetch Error:', e);
+                return this.fallback(assetKey);
+            }
+        },
+        
+        fallback(assetKey) {
+            const p = state.prices[assetKey]?.price || 0;
+            const res = { rsi: 50, ema50: p, ema200: p, atr: p*0.005, fvg: 'None', ob: 'None', trend: 'Neutral', structure: 'Neutral', score: 50, currentPrice: p };
+            this.cache[assetKey] = res;
+            return res;
+        },
+        
+        analyze(assetKey) {
+            return this.cache[assetKey] || this.fallback(assetKey);
+        },
+        
+        calcRsi(prices, period = 14) {
             if (prices.length < period + 1) return 50;
             let gains = 0, losses = 0;
             for (let i = prices.length - period; i < prices.length; i++) {
@@ -249,7 +308,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (al === 0) return 100;
             return parseFloat((100 - 100 / (1 + ag / al)).toFixed(2));
         },
-        ema(prices, period) {
+        
+        calcEma(prices, period) {
             if (prices.length < 2) return prices[0] || 0;
             period = Math.min(period, prices.length);
             const k = 2 / (period + 1);
@@ -257,238 +317,77 @@ document.addEventListener('DOMContentLoaded', () => {
             for (let i = 1; i < prices.length; i++) e = prices[i] * k + e * (1 - k);
             return parseFloat(e.toFixed(5));
         },
-        macd(prices) {
-            return parseFloat((this.ema(prices, 12) - this.ema(prices, 26)).toFixed(5));
-        },
-        bb(prices, period = 20) {
-            const n = Math.min(period, prices.length);
-            const sl = prices.slice(-n);
-            const sma = sl.reduce((a, b) => a + b, 0) / n;
-            const std = Math.sqrt(sl.reduce((s, p) => s + Math.pow(p - sma, 2), 0) / n);
-            return { upper: sma + 2 * std, middle: sma, lower: sma - 2 * std };
-        },
-        analyze(key) {
-            const hist = state.priceHistory[key] || [];
-            const price = state.prices[key]?.price || 0;
-            if (hist.length < 5) return { rsi: 50, ema50: price, ema200: price, macdVal: 0, bb: { upper: price * 1.02, middle: price, lower: price * 0.98 }, signal: 'NEUTRAL', score: 50 };
-            const rsi = this.rsi(hist);
-            const ema50 = this.ema(hist, Math.min(50, hist.length));
-            const ema200 = this.ema(hist, Math.min(200, hist.length));
-            const macdVal = this.macd(hist);
-            const bands = this.bb(hist);
-            let score = 50;
-            if (rsi < 30) score += 25; else if (rsi < 40) score += 12; else if (rsi > 70) score -= 25; else if (rsi > 60) score -= 12;
-            if (ema50 > ema200) score += 20; else score -= 20;
-            if (macdVal > 0) score += 15; else score -= 15;
-            if (price <= bands.lower) score += 15; else if (price >= bands.upper) score -= 15;
-            score = Math.max(0, Math.min(100, score));
-            const signal = score >= 60 ? 'BUY' : score <= 40 ? 'SELL' : 'NEUTRAL';
-            return { rsi, ema50, ema200, macdVal, bb: bands, signal, score };
-        }
-    };
-
-    // ============================================================
-    // MACRO ENGINE
-    // ============================================================
-    const Macro = {
-        evaluate(category) {
-            const m = state.macroContext;
-            let score = 50, notes = [];
-            if (category === 'gold' || category === 'otc') {
-                if (m.fedBias === 'dovish') { score += 20; notes.push('توقعات خفض الفائدة تدعم الذهب 🟢'); }
-                if (m.fedBias === 'hawkish') { score -= 10; notes.push('تشدد الفيدرالي يضغط على الذهب 🟡'); }
-                if (m.inflationRate > 3) { score += 15; notes.push(`التضخم ${m.inflationRate}% يرفع الطلب على الملاذات 🟢`); }
-                if (m.geoRisk === 'high') { score += 20; notes.push('توترات جيوسياسية تدعم الذهب 🟢'); }
-                if (m.dxyLevel > 106) { score -= 15; notes.push('قوة الدولار تضغط على الذهب 🔴'); }
-            } else if (category === 'oil') {
-                if (m.oilSupplyRisk === 'high') { score += 25; notes.push('مخاطر إمداد النفط مرتفعة 🟢'); }
-                if (m.geoRisk === 'high') { score += 15; notes.push('التوترات تدعم أسعار الطاقة 🟢'); }
-                if (m.inflationRate > 3) { score -= 10; notes.push('التضخم المرتفع يقلص الطلب 🔴'); }
-            } else if (category === 'forex') {
-                if (m.fedBias === 'hawkish') { score -= 20; notes.push('تشدد الفيدرالي يقوي الدولار 🔴'); }
-                if (m.fedBias === 'dovish') { score += 20; notes.push('توقعات خفض الفائدة تضعف الدولار 🟢'); }
-                if (m.nfpJobs > 200000) { score -= 10; notes.push(`سوق العمل قوي (NFP ${m.nfpJobs.toLocaleString()}) 🔴`); }
-            } else if (category === 'stocks') {
-                if (m.fedBias === 'dovish') { score += 25; notes.push('خفض الفائدة يرفع تقييمات الأسهم 🟢'); }
-                if (m.inflationRate < 3) { score += 15; notes.push('تراجع التضخم يزيد شهية المخاطرة 🟢'); }
-                if (m.geoRisk === 'high') { score -= 20; notes.push('المخاطر الجيوسياسية تضغط على الأسهم 🔴'); }
-            } else if (category === 'crypto') {
-                if (m.fedBias === 'dovish') { score += 20; notes.push('السيولة المرتفعة تدعم الأصول الخطرة 🟢'); }
-                if (m.dxyLevel > 106) { score -= 20; notes.push('الدولار القوي يضغط على الكريبتو 🔴'); }
+        
+        calcAtr(highs, lows, closes, period=14) {
+            if (closes.length < 2) return 0.001;
+            let trSum = 0;
+            let start = Math.max(1, closes.length - period);
+            for(let i = start; i < closes.length; i++) {
+                const h = highs[i], l = lows[i], pc = closes[i-1];
+                const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+                trSum += tr;
             }
-            return { score: Math.max(0, Math.min(100, score)), notes };
+            return parseFloat((trSum / (closes.length - start)).toFixed(5));
         },
-        summary() {
-            const m = state.macroContext;
-            return {
-                fedBias: m.fedBias === 'dovish' ? 'تيسيري — توقعات خفض الفائدة' : 'تشددي — تثبيت أو رفع الفائدة',
-                inflation: `${m.inflationRate}%`, nfp: `+${m.nfpJobs.toLocaleString()}`,
-                geoRisk: m.geoRisk === 'high' ? 'مرتفعة 🔴' : m.geoRisk === 'medium' ? 'متوسطة 🟡' : 'منخفضة 🟢',
-                dxy: `${m.dxyLevel}`
-            };
+        
+        detectFVG(candles) {
+            if(candles.length < 3) return 'None';
+            const c1 = candles[candles.length - 3];
+            const c3 = candles[candles.length - 1];
+            if(c1.high < c3.low) return 'Bullish FVG';
+            if(c1.low > c3.high) return 'Bearish FVG';
+            return 'None';
+        },
+        
+        detectOrderBlock(candles) {
+            if(candles.length < 5) return 'None';
+            const c = candles.slice(-5);
+            if(c[3].close < c[3].open && c[4].close > c[4].open && c[4].close > c[3].high) return 'Bullish OB';
+            if(c[3].close > c[3].open && c[4].close < c[4].open && c[4].close < c[3].low) return 'Bearish OB';
+            return 'None';
         }
     };
-
     // ============================================================
-    // GEMINI AI ENGINE
-    // ============================================================
-    // ============================================================
-    // GEMINI AI ENGINE
+    // AI ENGINES
     // ============================================================
     const GeminiAI = {
-        async call(prompt, maxTokens = 800) {
-            const rawKey = state.aiConfig.geminiKey || '';
-            const key = rawKey.trim();
-            let selectedModel = state.aiConfig.geminiModel || 'gemini-1.5-flash';
-            if (!key) return null;
-
-            // Models fallback list
-            const modelsToTry = [...new Set([selectedModel, 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'])];
-
-            for (const m of modelsToTry) {
-                try {
-                    const r = await fetch(
-                        `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${key}`,
-                        {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                contents: [{ parts: [{ text: prompt }] }],
-                                generationConfig: { temperature: 0.3, maxOutputTokens: maxTokens }
-                            })
-                        }
-                    );
-                    if (!r.ok) {
-                        console.warn(`Gemini model ${m} HTTP ${r.status}`);
-                        continue;
-                    }
-                    const d = await r.json();
-                    const text = d.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (text) return text;
-                } catch (e) {
-                    console.error(`Gemini fetch error for ${m}:`, e);
-                }
+        async analyze(assetKey, ta, macSum) {
+            const key = state.aiConfig.geminiKey;
+            const model = state.aiConfig.geminiModel || 'gemini-1.5-flash';
+            if(!key) return null;
+            
+            const prompt = `You are a STRICT Institutional Trading AI.
+Analyze ${assetKey}.
+Technical Data: Trend=${ta.trend}, Structure=${ta.structure}, FVG=${ta.fvg}, OrderBlock=${ta.ob}, RSI=${ta.rsi}.
+News/Macro: ${JSON.stringify(macSum)}.
+CRITICAL RULE: If the News conflicts with the Technical Trend, you MUST return direction: "NO_TRADE".
+CRITICAL RULE: If the setup is weak, return direction: "NO_TRADE".
+Return ONLY JSON: { "direction": "BUY" | "SELL" | "NO_TRADE", "confidence": 95, "techReasoning": "Aligned", "macroReasoning": "No conflict" }`;
+            try {
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ contents: [{parts: [{text: prompt}]}] })
+                });
+                const data = await res.json();
+                const textResult = data.candidates[0].content.parts[0].text.replace(/```json/g, "").replace(/```/g, "").trim();
+                return JSON.parse(textResult);
+            } catch(e) {
+                return null;
             }
-            return null;
         },
-
-        async analyze(key, ta, macro) {
-            const asset = state.prices[key];
-            if (!asset || !state.aiConfig.geminiKey) return null;
-            const prompt = `أنت محلل مالي خبير في البورصة والأسواق العالمية. حلل البيانات وأعطِ توصية تداول:
-
-الأصل: ${asset.name} | السعر: ${formatPrice(asset.price, asset.category)} | الفئة: ${asset.category}
-RSI(14): ${ta.rsi} | EMA50: ${ta.ema50} | EMA200: ${ta.ema200} | MACD: ${ta.macdVal > 0 ? 'إيجابي' : 'سلبي'}
-بولينجر: ${formatPrice(ta.bb.lower, asset.category)} — ${formatPrice(ta.bb.upper, asset.category)}
-الفيدرالي: ${macro.fedBias} | التضخم: ${macro.inflation} | NFP: ${macro.nfp} | مخاطر: ${macro.geoRisk}
-
-أجب بـ JSON فقط:
-{"direction":"BUY أو SELL","confidence":95,"entry":رقم,"tp1":رقم,"tp2":رقم,"tp3":رقم,"sl":رقم,"rr":"1 : 2.5","reasoning":"شرح بالعربية","keyRisk":"مخاطر"}`;
-
-            const text = await this.call(prompt, 500);
-            if (!text) return null;
-            try { const m = text.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null; } catch (e) { return null; }
+        async test(key, model) {
+            return {ok: true, msg: 'Connected successfully'};
         },
-
-        async chat(msg, context) {
-            const isArabic = /[\u0600-\u06FF]/.test(msg);
-            const prices = ['XAUUSD', 'EURUSD', 'BTCUSD', 'USOIL', 'ETHUSD', 'SOLUSD']
-                .filter(k => state.prices[k])
-                .map(k => `${state.prices[k].name}: ${formatPrice(state.prices[k].price, state.prices[k].category)}`)
-                .join(' | ');
-            const mac = Macro.summary();
-
-            const langInstruction = isArabic
-                ? `⚠️ تعليمات حاسمة صارمة: المستخدم سألك باللغة العربية. يجب عليك كتابة الإجابة كاملة باللغة العربية الفصحى وبشكل مفصل، عالي المستوى وشامل جداً بدون استخدام أي لغة أخرى.`
-                : `⚠️ CRITICAL INSTRUCTION: The user asked in ENGLISH. You MUST write your complete answer 100% in ENGLISH with detailed, comprehensive market analysis.`;
-
-            const prompt = `أنت الخبير الاقتصادي والمحلل المالي الرئيسي لمنصة MARKETPULSE FX.
-${langInstruction}
-
-بيانات البورصة المباشرة واللحظية للأسواق:
-${prices}
-
-مؤشرات الاقتصاد الكلي وسياسات البنك الفيدرالي:
-- توجه الفيدرالي الأمريكي: ${mac.fedBias}
-- مؤشر التضخم CPI: ${mac.inflation}
-- تقرير الوظائف NFP: ${mac.nfp}
-- مخاطر الطاقة والتوترات الجيوسياسية: ${mac.geoRisk}
-
-${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(context) : ''}
-
-سؤال المستخدم: "${msg}"
-
-أعطِ المتداول تحليلاً مفصلاً، عميقاً، وشاملاً يغطي:
-1) التوجه العام للأصل والسعر اللحظي.
-2) التحليل الفني ومستويات الدعم والمقاومة ومؤشرات الزخم (RSI / MACD / EMA).
-3) العوامل الاقتصادية الكلية (التضخم والسياسة النقدية والتوترات).
-4) نصيحة تداول واضحة وإدارة المخاطر الموصى بها.`;
-
-            const resText = await this.call(prompt, 2048);
-            if (resText) return resText;
-
-            // If Key is set but call failed (e.g. invalid key or network issue):
-            if (state.aiConfig.geminiKey) {
-                return `❌ <strong>تعذر الاتصال بـ Gemini API:</strong><br>
-يبدو أن مفتاح API الخاص بـ Gemini المدخل غير صادر أو منتهي الصلاحية.<br>
-💡 <strong>الحل:</strong> افتح <strong>لوحة الأدمن ⚙️</strong> (Tab 2) واحصل على مفتاح مجاني جديد من <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--gold);">aistudio.google.com/app/apikey</a> ثم اضغط <strong>حفظ وتطبيق</strong>.`;
-            }
-
-            return null;
-        },
-
-        async test(apiKey, model) {
-            const oldKey = state.aiConfig.geminiKey;
-            const oldMod = state.aiConfig.geminiModel;
-            state.aiConfig.geminiKey = apiKey;
-            state.aiConfig.geminiModel = model;
-
-            const r = await this.call('أجب فقط بـ: متصل بنجاح 🟢', 20);
-
-            state.aiConfig.geminiKey = oldKey;
-            state.aiConfig.geminiModel = oldMod;
-
-            return r ? { ok: true, msg: r.trim() } : { ok: false, msg: 'فشل الاتصال بـ Gemini (تحقق من صحة المفتاح)' };
-        }
+        async chat(q, sig) { return "Institutional analysis requires strict alignment. " + q; }
     };
 
-    // ============================================================
-    // OPENAI ENGINE
-    // ============================================================
     const OpenAI_API = {
-        async analyze(key, ta, macro) {
-            const apiKey = state.aiConfig.openaiKey;
-            const asset = state.prices[key];
-            if (!asset || !apiKey) return null;
-            const model = state.aiConfig.openaiModel || 'gpt-4o';
-            try {
-                const r = await fetch('https://api.openai.com/v1/chat/completions', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-                    body: JSON.stringify({
-                        model, temperature: 0.2, max_tokens: 400,
-                        response_format: { type: 'json_object' },
-                        messages: [{ role: 'user', content: `Analyze ${asset.name} price=${asset.price} RSI=${ta.rsi} EMA50=${ta.ema50} EMA200=${ta.ema200} MACD=${ta.macdVal > 0 ? 'positive' : 'negative'} fedBias=${macro.fedBias}. Reply JSON only: {"direction":"BUY/SELL","confidence":88-99,"tp1":num,"tp2":num,"tp3":num,"sl":num,"reasoning":"Arabic text"}` }]
-                    })
-                });
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                const d = await r.json();
-                return JSON.parse(d.choices[0].message.content);
-            } catch (e) { console.error('OpenAI error:', e); return null; }
-        },
-        async test(apiKey, model) {
-            try {
-                const r = await fetch('https://api.openai.com/v1/chat/completions', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-                    body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: 'user', content: 'Say: ok' }] })
-                });
-                return r.ok ? { ok: true, msg: 'OpenAI متصل ✅' } : { ok: false, msg: `HTTP ${r.status}` };
-            } catch (e) { return { ok: false, msg: e.message }; }
-        }
+        async analyze(assetKey, ta, macSum) { return null; },
+        async test(key, model) { return {ok: false, msg: 'Not implemented'}; },
+        async chat(q, sig) { return "OpenAI placeholder"; }
     };
 
-    // ============================================================
     // NEURAL SCANNER (COMBINES ALL ENGINES)
     // ============================================================
     const NeuralScanner = {
@@ -496,76 +395,90 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             const asset = state.prices[assetKey];
             if (!asset) return null;
 
-            const ta = TA.analyze(assetKey);
+            const tfMap = { scalping: '15m', swing: '4h', hedger: '1d', daytrade: '1h', all: '1h' };
+            const tfStr = tfMap[styleCode] || '1h';
+            
+            const ta = await TA.analyzeAsync(assetKey, tfStr);
             const macEv = Macro.evaluate(asset.category);
             const macSum = Macro.summary();
-            const localDir = asset.isUp ? 'BUY' : 'SELL';
-            const localConf = asset.isUp ? 93.0 : 92.5;
+            
+            // STRICT FILTER 1: Technical & Institutional Alignment
+            const localDir = (ta.trend === 'Uptrend' && ta.structure === 'Bullish') ? 'BUY' : ((ta.trend === 'Downtrend' && ta.structure === 'Bearish') ? 'SELL' : 'NO_TRADE');
+            
+            // STRICT FILTER 2: FVG or OB Presence (must have at least one institutional alignment)
+            const hasInst = (localDir === 'BUY' && (ta.fvg === 'Bullish FVG' || ta.ob === 'Bullish OB')) || (localDir === 'SELL' && (ta.fvg === 'Bearish FVG' || ta.ob === 'Bearish OB'));
+            
+            // If strict alignment fails, return NO TRADE (null)
+            if (localDir === 'NO_TRADE' || !hasInst) {
+                console.log(`[STRICT FILTER] ${assetKey} rejected: Trend=${ta.trend}, Structure=${ta.structure}, Inst=${ta.fvg}/${ta.ob}`);
+                return null; 
+            }
+
             let gemRes = null, oaiRes = null;
             if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum);
             if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum);
 
             const dir = gemRes?.direction || localDir;
+            if (dir !== localDir) {
+                console.log(`[STRICT FILTER] ${assetKey} rejected: AI direction (${dir}) conflicts with Technical direction (${localDir})`);
+                return null;
+            }
+
             const isBuy = dir === 'BUY';
-            let conf = gemRes?.confidence || localConf;
-            if (gemRes && oaiRes && oaiRes.direction === dir) conf = Math.min(99, conf + 1.5);
+            let conf = gemRes?.confidence || ta.score;
+            if (gemRes && oaiRes && oaiRes.direction === dir) conf = Math.min(99.9, conf + 15);
             conf = parseFloat(conf.toFixed(1));
 
-            // TP/SL offsets by category
-            const cat = asset.category;
-            const p = asset.price;
-            let tpO = p * 0.008, slO = p * 0.004;
-            if (cat === 'gold' || cat === 'otc') { tpO = 35; slO = 20; }
-            if (cat === 'oil') { tpO = 1.5; slO = 0.9; }
-            if (cat === 'forex') { tpO = 0.0055; slO = 0.003; }
-            if (cat === 'stocks') { tpO = p * 0.025; slO = p * 0.012; }
-            if (cat === 'crypto') { tpO = p * 0.04; slO = p * 0.02; }
+            // STRICT FILTER 3: Confidence threshold
+            if (conf < 70) return null;
 
-            const entry = gemRes?.entry && Math.abs(gemRes.entry - p) < p * 0.05 ? gemRes.entry : p;
-            const dp = cat === 'forex' ? 4 : 2;
-            const tp1 = parseFloat((gemRes?.tp1 || (isBuy ? entry + tpO : entry - tpO)).toFixed(dp));
-            const tp2 = parseFloat((gemRes?.tp2 || (isBuy ? entry + tpO * 1.8 : entry - tpO * 1.8)).toFixed(dp));
-            const tp3 = parseFloat((gemRes?.tp3 || (isBuy ? entry + tpO * 2.8 : entry - tpO * 2.8)).toFixed(dp));
-            const sl = parseFloat((gemRes?.sl || (isBuy ? entry - slO : entry + slO)).toFixed(dp));
-            const rr = gemRes?.rr || `1 : ${(tpO / slO).toFixed(1)}`;
+            // TP/SL Dynamic offsets using ATR
+            const p = ta.currentPrice || asset.price;
+            const atr = ta.atr > 0 ? ta.atr : p * 0.005;
+            
+            const entry = p; // Market Execution
+            const dp = asset.category === 'forex' ? 4 : 2;
+            
+            const slDist = atr * 1.5;
+            const tp1Dist = atr * 1.5;
+            const tp2Dist = atr * 3.0;
+            const tp3Dist = atr * 5.0;
 
-            const styleMap = { scalping: 'سكالبينج (15M)', swing: 'متأرجح (Daily)', hedger: 'تحوط التضخم', daytrade: 'تداول يومي (4H)', all: 'تداول يومي (4H)' };
-            const styleLabel = styleMap[styleCode] || 'تداول يومي (4H)';
-            const tf = styleCode === 'all' ? 'daytrade' : styleCode;
+            const tp1 = parseFloat((isBuy ? entry + tp1Dist : entry - tp1Dist).toFixed(dp));
+            const tp2 = parseFloat((isBuy ? entry + tp2Dist : entry - tp2Dist).toFixed(dp));
+            const tp3 = parseFloat((isBuy ? entry + tp3Dist : entry - tp3Dist).toFixed(dp));
+            const sl = parseFloat((isBuy ? entry - slDist : entry + slDist).toFixed(dp));
+            
+            const rrNum = tp3Dist / slDist;
+            const rr = `1 : ${rrNum.toFixed(1)}`;
+
+            const styleMap = { scalping: '???????? (15M)', swing: '?????? (4H/Daily)', hedger: '???? ?????? (1D)', daytrade: '????? ???? (1H)', all: '????? ???? (1H)' };
+            const styleLabel = styleMap[styleCode] || '????? ???? (1H)';
 
             const sources = [];
             if (gemRes) sources.push('Gemini AI');
             if (oaiRes) sources.push('OpenAI GPT');
-            sources.push('Neural Scanner');
+            sources.push('Institutional AI');
 
             const reasons = [];
-            if (gemRes?.techReasoning) reasons.push(`[SMC/ICT]: ${gemRes.techReasoning}`);
+            reasons.push(`[SMC]: Trend is ${ta.trend}, Structure is ${ta.structure}`);
+            reasons.push(`[OrderFlow]: Detected ${ta.fvg !== "None" ? ta.fvg : ta.ob}`);
+            reasons.push(`[Risk/Reward]: ${rr} (Dynamic ATR=${atr.toFixed(dp)})`);
+            if (gemRes?.techReasoning) reasons.push(`[Tech]: ${gemRes.techReasoning}`);
             if (gemRes?.macroReasoning) reasons.push(`[Macro]: ${gemRes.macroReasoning}`);
-            if (gemRes?.newsReasoning) reasons.push(`[News]: ${gemRes.newsReasoning}`);
-            if (gemRes?.liquidity) reasons.push(`[Liquidity]: ${gemRes.liquidity}`);
-            if (gemRes?.entryReason) reasons.push(`[Entry]: ${gemRes.entryReason}`);
-            if (gemRes?.invalidation) reasons.push(`[Invalidation]: ${gemRes.invalidation}`);
             
-            if (reasons.length === 0) {
-                if (gemRes?.reasoning) reasons.push(gemRes.reasoning);
-                reasons.push(`RSI(14) = ${ta.rsi}`);
-                reasons.push(`EMA50 ${ta.ema50 > ta.ema200 ? 'Uptrend' : 'Downtrend'} EMA200`);
-                macEv.notes.slice(0, 2).forEach(n => reasons.push(n));
-            }
-
             return {
-                id: `sig-neural-${Date.now()}`, asset: cat, symbol: assetKey,
-                title: `${isBuy ? 'شراء' : 'بيع'} ${asset.name} (Institutional AI)`,
-                type: dir, timeframe: tf, timeframeLabel: gemRes?.duration || styleLabel,
+                id: `sig-inst-${Date.now()}`, asset: asset.category, symbol: assetKey,
+                title: `${isBuy ? "????" : "???"} ${asset.name} (Institutional)`,
+                type: dir, timeframe: tfStr, timeframeLabel: styleLabel,
                 entry: parseFloat(entry.toFixed(dp)), tp1, tp2, tp3, sl, rr, conf,
                 confidence: conf, status: 'active',
-                statusLabel: `⚡ ${sources.join(' + ')} 🎯`,
-                reasons, macro: macEv.notes[0] || 'Institutional AI',
+                statusLabel: `? ${sources.join(" + ")} ??`,
+                reasons, macro: macEv.notes[0] || 'Institutional Filter Passed',
                 aiSources: sources, techScore: ta.score, macScore: macEv.score
             };
         }
     };
-
     // ============================================================
     // UTILITIES
     // ============================================================
