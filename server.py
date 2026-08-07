@@ -11,13 +11,15 @@ Pulls 100% Real-Time Live Prices directly from TradingView's Global Scanner API:
 - Crypto: BINANCE (BTCUSDT, ETHUSDT, SOLUSDT)
 """
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import urllib.request
 import json
 import threading
 import time
 import xml.etree.ElementTree as ET
+import re
+import yfinance as yf
 import re
 
 app = Flask(__name__)
@@ -230,6 +232,53 @@ def get_prices():
         'timestamp': price_cache['last_updated'],
         'prices': data
     })
+
+@app.route('/api/ohlcv', methods=['GET'])
+def get_ohlcv():
+    symbol = request.args.get('symbol', 'XAUUSD')
+    timeframe = request.args.get('timeframe', '1h')
+    
+    yf_symbol = symbol
+    if symbol == 'XAUUSD': yf_symbol = 'GC=F'
+    elif symbol == 'XAGUSD': yf_symbol = 'SI=F'
+    elif symbol == 'USOIL': yf_symbol = 'CL=F'
+    elif symbol == 'NGAS': yf_symbol = 'NG=F'
+    elif symbol == 'EURUSD': yf_symbol = 'EURUSD=X'
+    elif symbol == 'GBPUSD': yf_symbol = 'GBPUSD=X'
+    elif symbol == 'USDJPY': yf_symbol = 'JPY=X'
+    elif symbol == 'USDCAD': yf_symbol = 'CAD=X'
+    elif symbol == 'USDCHF': yf_symbol = 'CHF=X'
+    elif symbol == 'AUDUSD': yf_symbol = 'AUDUSD=X'
+    elif symbol == 'NZDUSD': yf_symbol = 'NZDUSD=X'
+    elif symbol == 'BTCUSDT': yf_symbol = 'BTC-USD'
+    elif symbol == 'ETHUSDT': yf_symbol = 'ETH-USD'
+    elif symbol == 'SOLUSDT': yf_symbol = 'SOL-USD'
+    elif symbol == 'US30': yf_symbol = '^DJI'
+    elif symbol == 'SPX500': yf_symbol = '^GSPC'
+    elif symbol == 'NAS100': yf_symbol = '^IXIC'
+    
+    interval_map = {'15m': ('15m', '5d'), '1h': ('1h', '10d'), '4h': ('1h', '30d'), '1d': ('1d', '60d')}
+    interval, period = interval_map.get(timeframe, ('1h', '10d'))
+    
+    try:
+        ticker = yf.Ticker(yf_symbol)
+        df = ticker.history(interval=interval, period=period)
+        if df.empty:
+            return jsonify({'status': 'error', 'message': 'No data'})
+            
+        candles = []
+        for index, row in df.iterrows():
+            candles.append({
+                'time': int(index.timestamp() * 1000),
+                'open': row['Open'],
+                'high': row['High'],
+                'low': row['Low'],
+                'close': row['Close'],
+                'volume': row['Volume']
+            })
+        return jsonify({'status': 'success', 'data': candles})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
 
 @app.route('/api/news', methods=['GET'])
 def get_news():
