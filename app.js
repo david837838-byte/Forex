@@ -1104,8 +1104,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             card.innerHTML = `
                 <div class="signal-header">
                     <div class="signal-asset">
-                        <img src="${logo}" alt="${sig.symbol}">
-                        <span class="asset-name">${sig.symbol}</span>
+                        <span class="asset-name"><i class="fa-solid fa-bolt text-gold"></i> ${sig.symbol}</span>
                     </div>
                     <span class="signal-time">${sig.time || 'الآن'} <i class="fa-regular fa-clock"></i></span>
                 </div>
@@ -1122,7 +1121,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                         </div>
                         <div class="price-box">
                             <span class="p-label text-success">الهدف (TP)</span>
-                            <span class="p-val">${sig.tp}</span>
+                            <span class="p-val">${sig.tp1}</span>
                         </div>
                         <div class="price-box">
                             <span class="p-label text-danger">الوقف (SL)</span>
@@ -1142,8 +1141,8 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         // Add event listeners to analyze buttons
         document.querySelectorAll('.analyze-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
-                const id = parseInt(e.currentTarget.getAttribute('data-id'));
-                openSignalModal(id);
+                const id = e.currentTarget.getAttribute('data-id');
+                openModal(id);
             });
         });
     }
