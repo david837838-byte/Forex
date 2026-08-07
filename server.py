@@ -123,8 +123,8 @@ def fetch_tradingview_live_prices():
 def fetch_macro_news():
     """Fetch real-time news from RSS feeds and analyze macro sentiment."""
     rss_urls = [
-        "https://www.forexlive.com/feed", # Forex Live News
-        "https://feeds.content.dowjones.io/public/rss/mw_topstories" # MarketWatch Top Stories
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664", # CNBC Top News
+        "https://nypost.com/business/feed/" # NYPost Business Live
     ]
     
     fetched_news = []
