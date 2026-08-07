@@ -434,7 +434,7 @@ Return ONLY JSON: { "direction": "BUY" | "SELL" | "NO_TRADE", "confidence": 95, 
             conf = parseFloat(conf.toFixed(1));
 
             // STRICT FILTER 3: Confidence threshold
-            if (conf < 70) return null;
+            if (conf < 60) return null;
 
             // TP/SL Dynamic offsets using ATR
             const p = ta.currentPrice || asset.price;
