@@ -1074,10 +1074,10 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
         let filtered = signalsData;
         if (state.activeAssetFilter !== 'all') {
             if (state.activeAssetFilter === 'favorites') {
-                filtered = filtered.filter(s => state.favorites.includes(s.asset));
+                filtered = filtered.filter(s => state.favorites.includes(s.symbol));
             } else {
-                const map = { 'crypto': 'crypto', 'forex': 'forex', 'metals': 'metals', 'stocks': 'stocks' };
-                filtered = filtered.filter(s => state.prices[s.asset] && state.prices[s.asset].category === map[state.activeAssetFilter]);
+                const map = { 'crypto': 'crypto', 'forex': 'forex', 'metals': 'gold', 'stocks': 'stocks', 'oil': 'oil' };
+                filtered = filtered.filter(s => state.prices[s.symbol] && (state.prices[s.symbol].category === map[state.activeAssetFilter] || (state.activeAssetFilter === 'metals' && state.prices[s.symbol].category === 'oil')));
             }
         }
 
@@ -1120,8 +1120,16 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
                             <span class="p-val entry">${sig.entry}</span>
                         </div>
                         <div class="price-box">
-                            <span class="p-label text-success">الهدف (TP)</span>
+                            <span class="p-label text-success">TP1</span>
                             <span class="p-val">${sig.tp1}</span>
+                        </div>
+                        <div class="price-box">
+                            <span class="p-label text-success">TP2</span>
+                            <span class="p-val">${sig.tp2}</span>
+                        </div>
+                        <div class="price-box">
+                            <span class="p-label text-success">TP3</span>
+                            <span class="p-val">${sig.tp3}</span>
                         </div>
                         <div class="price-box">
                             <span class="p-label text-danger">الوقف (SL)</span>
