@@ -60,7 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
             geminiKey: '', geminiModel: 'gemini-1.5-flash',
             openaiKey: '', openaiModel: 'gpt-4o',
             finnhubKey: '',
-            minConfidence: 95, strategyBias: 'balanced'
+            minConfidence: 85, strategyBias: 'balanced'
         },
         macroContext: {
             fedBias: 'hawkish', inflationRate: 3.0,
@@ -80,8 +80,12 @@ document.addEventListener('DOMContentLoaded', () => {
             localStorage.removeItem('mp_cache');
             sessionStorage.clear();
         } catch (e) { }
-        const saved = localStorage.getItem('mp_ai_cfg');
-        if (saved) try { Object.assign(state.aiConfig, JSON.parse(saved)); } catch (e) { }
+                const saved = localStorage.getItem('mp_ai_cfg');
+        if (saved) try { 
+            let parsed = JSON.parse(saved);
+            if (parsed.minConfidence === 95) parsed.minConfidence = 85;
+            Object.assign(state.aiConfig, parsed); 
+        } catch (e) { }
     })();
 
     // ============================================================
