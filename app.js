@@ -1076,8 +1076,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             if (state.activeAssetFilter === 'favorites') {
                 filtered = filtered.filter(s => state.favorites.includes(s.symbol));
             } else {
-                const map = { 'crypto': 'crypto', 'forex': 'forex', 'metals': 'gold', 'stocks': 'stocks', 'oil': 'oil' };
-                filtered = filtered.filter(s => state.prices[s.symbol] && (state.prices[s.symbol].category === map[state.activeAssetFilter] || (state.activeAssetFilter === 'metals' && state.prices[s.symbol].category === 'oil')));
+                filtered = filtered.filter(s => state.prices[s.symbol] && state.prices[s.symbol].category === state.activeAssetFilter);
             }
         }
 
