@@ -440,7 +440,7 @@ Return ONLY valid JSON format:
             return {
                 id: `sig-inst-${Date.now()}`, asset: asset.category, symbol: assetKey,
                 title: `${isBuy ? "????" : "???"} ${asset.name} (Institutional)`,
-                type: dir, timeframe: tfStr, timeframeLabel: styleLabel,
+                type: dir, timeframe: styleCode, timeframeLabel: styleLabel,
                 entry: parseFloat(entry.toFixed(dp)), tp1, tp2, tp3, sl, rr, conf,
                 confidence: conf, status: 'active',
                 statusLabel: `? ${sources.join(" + ")} ??`,
