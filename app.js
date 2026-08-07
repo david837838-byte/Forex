@@ -999,74 +999,40 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     // ============================================================
     // 10-MINUTE DYNAMIC AI SIGNAL GENERATOR
     // ============================================================
-    function generateAISignals() {
-        const m = state.macroContext || { geoRisk: 'normal', fedBias: 'neutral' };
+    async function generateAISignals() {
+        const traderStyle = state.activeTraderStyle || 'daytrade';
         let newSignals = [];
-        let idCounter = 1;
-
-        const tfSelect = document.getElementById('timeframe-select');
-        const tfValue = tfSelect ? tfSelect.value : '1H';
-
-        let timeframeMult = 1.0;
-        let timeframeLabel = '1 ساعة (Live)';
-        if (tfValue === '15m') { timeframeMult = 0.5; timeframeLabel = '15 دقيقة (سكالبينج)'; }
-        if (tfValue === '30m') { timeframeMult = 0.75; timeframeLabel = '30 دقيقة (سريع)'; }
-        if (tfValue === '1H') { timeframeMult = 1.0; timeframeLabel = '1 ساعة (مدى يومي)'; }
-        if (tfValue === '4H') { timeframeMult = 2.0; timeframeLabel = '4 ساعات (مدى متوسط)'; }
-        if (tfValue === '1D') { timeframeMult = 4.0; timeframeLabel = 'يومي (سوينج استراتيجي)'; }
-
-        // STRICT LOGIC
-        Object.keys(state.prices).forEach(key => {
+        const keysToScan = Object.keys(state.prices);
+        
+        for (let i = 0; i < keysToScan.length; i++) {
+            const key = keysToScan[i];
             const asset = state.prices[key];
-            if (!asset || asset.price <= 0) return;
+            if (!asset || asset.price <= 0) continue;
 
-            const p = asset.price;
-
-            // AI Confidence Score calculation (0 to 100)
-            let confidenceScore = Math.floor(Math.random() * 40) + 50; // Base 50-90
-            
-            // Add priority (+5) if it's in favorites
-            if (state.favorites && state.favorites.includes(key)) {
-                confidenceScore += 10;
+            const sig = await NeuralScanner.generate(key, traderStyle);
+            if (sig && sig.confidence >= state.aiConfig.minConfidence) {
+                newSignals.push(sig);
             }
+        }
 
-            // ONLY ACCEPT HIGH QUALITY SIGNALS >= 85%
-            if (confidenceScore >= 85) {
-                const type = Math.random() > 0.5 ? 'buy' : 'sell';
-                const tpDist = p * (Math.random() * 0.005 + 0.002) * timeframeMult; 
-                const slDist = tpDist * 0.5;
-
-                const tp = type === 'buy' ? p + tpDist : p - tpDist;
-                const sl = type === 'buy' ? p - slDist : p + slDist;
-                
-                const entryLabel = (key === 'XAUUSD' || key === 'XAGUSD' || key.includes('USD')) ? p.toFixed(2) : p.toFixed(4);
-                const tpLabel = (key === 'XAUUSD' || key === 'XAGUSD' || key.includes('USD')) ? tp.toFixed(2) : tp.toFixed(4);
-                const slLabel = (key === 'XAUUSD' || key === 'XAGUSD' || key.includes('USD')) ? sl.toFixed(2) : sl.toFixed(4);
-
-                let reason = "تقاطع مناطق السيولة (SMC) وتأكيد كسر هيكل السوق.";
-                if(type === 'buy') reason = "امتصاص بيعي قوي عند مستوى طلب تاريخي + تدفق سيولة شرائية.";
-                if(type === 'sell') reason = "رفض سعري من منطقة عرض هامة (FVG) مع توافق الاتجاه العام.";
-
-                newSignals.push({
-                    id: idCounter++,
-                    asset: key,
-                    type: type,
-                    entry: entryLabel,
-                    tp: tpLabel,
-                    sl: slLabel,
-                    time: 'الآن',
-                    status: 'active',
-                    timeframe: timeframeLabel,
-                    confidence: Math.min(confidenceScore, 99),
-                    reason: reason,
-                    timestamp: Date.now()
-                });
+        newSignals = newSignals.map(sig => {
+            if (state.favorites && state.favorites.includes(sig.symbol)) {
+                sig.confidence = Math.min(99.9, sig.confidence + 10);
+                sig.statusLabel = 'قوية وموثقة (مفضلة) 🌟';
             }
-        });
+            return sig;
+        }).sort((a, b) => b.confidence - a.confidence);
 
-        // Update global signals array
         signalsData = newSignals;
         renderSignals();
+        
+        const lastScan = document.getElementById('last-scan-time');
+        if (lastScan) {
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            lastScan.innerHTML = `<i class="fa-solid fa-rotate text-success fa-spin"></i> آخر مسح: ${hh}:${mm}`;
+        }
     }
     
     // ============================================================
@@ -1096,7 +1062,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
     // RENDER SIGNALS
     // ============================================================
     function renderSignals() {
-        const container = document.getElementById('signals-container');
+        const container = document.getElementById('signals-grid');
         if (!container) return;
 
         container.innerHTML = '';
