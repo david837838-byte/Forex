@@ -1096,7 +1096,7 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             const typeLabel = isBuy ? 'شراء (Buy)' : 'بيع (Sell)';
             const typeIcon = isBuy ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down';
             
-            const pData = state.prices[sig.asset];
+            const pData = state.prices[sig.symbol];
             const logo = pData ? pData.logo : 'https://cryptologos.cc/logos/bitcoin-btc-logo.svg';
 
             const card = document.createElement('div');
@@ -1104,10 +1104,10 @@ ${context ? 'معلومات التوصية المحددة: ' + JSON.stringify(co
             card.innerHTML = `
                 <div class="signal-header">
                     <div class="signal-asset">
-                        <img src="${logo}" alt="${sig.asset}">
-                        <span class="asset-name">${sig.asset}</span>
+                        <img src="${logo}" alt="${sig.symbol}">
+                        <span class="asset-name">${sig.symbol}</span>
                     </div>
-                    <span class="signal-time">${sig.time} <i class="fa-regular fa-clock"></i></span>
+                    <span class="signal-time">${sig.time || 'الآن'} <i class="fa-regular fa-clock"></i></span>
                 </div>
                 
                 <div class="signal-body">
