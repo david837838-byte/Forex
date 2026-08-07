@@ -351,7 +351,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // AI ENGINES
     // ============================================================
     const GeminiAI = {
-        async analyze(assetKey, ta, macSum) {
+        async analyze(assetKey, ta, macSum, localDir) {
             const key = state.aiConfig.geminiKey;
             const model = state.aiConfig.geminiModel || 'gemini-1.5-flash';
             if(!key) return null;
@@ -383,7 +383,7 @@ Return ONLY JSON: { "direction": "BUY" | "SELL" | "NO_TRADE", "confidence": 95, 
     };
 
     const OpenAI_API = {
-        async analyze(assetKey, ta, macSum) { return null; },
+        async analyze(assetKey, ta, macSum, localDir) { return null; },
         async test(key, model) { return {ok: false, msg: 'Not implemented'}; },
         async chat(q, sig) { return "OpenAI placeholder"; }
     };
@@ -419,8 +419,8 @@ Return ONLY JSON: { "direction": "BUY" | "SELL" | "NO_TRADE", "confidence": 95, 
             }
 
             let gemRes = null, oaiRes = null;
-            if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum);
-            if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum);
+            if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum, localDir);
+            if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum, localDir);
 
             const dir = gemRes?.direction || localDir;
             if (dir !== localDir) {
