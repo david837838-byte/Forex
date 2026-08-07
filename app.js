@@ -403,10 +403,14 @@ Return ONLY JSON: { "direction": "BUY" | "SELL" | "NO_TRADE", "confidence": 95, 
             const macSum = Macro.summary();
             
             // STRICT FILTER 1: Technical & Institutional Alignment
-            const localDir = (ta.trend === 'Uptrend' && ta.structure === 'Bullish') ? 'BUY' : ((ta.trend === 'Downtrend' && ta.structure === 'Bearish') ? 'SELL' : 'NO_TRADE');
+            let localDir = 'NO_TRADE';
+            let buyScore = (ta.trend === 'Uptrend' ? 1 : 0) + (ta.structure === 'Bullish' ? 1 : 0) + (ta.rsi > 40 && ta.rsi < 70 ? 1 : 0);
+            let sellScore = (ta.trend === 'Downtrend' ? 1 : 0) + (ta.structure === 'Bearish' ? 1 : 0) + (ta.rsi < 60 && ta.rsi > 30 ? 1 : 0);
+            if (buyScore >= 2) localDir = 'BUY';
+            else if (sellScore >= 2) localDir = 'SELL';
             
             // STRICT FILTER 2: FVG or OB Presence (must have at least one institutional alignment)
-            const hasInst = (localDir === 'BUY' && (ta.fvg === 'Bullish FVG' || ta.ob === 'Bullish OB')) || (localDir === 'SELL' && (ta.fvg === 'Bearish FVG' || ta.ob === 'Bearish OB'));
+            const hasInst = (localDir === 'BUY' && (ta.fvg === 'Bullish FVG' || ta.ob === 'Bullish OB' || ta.structure === 'Bullish')) || (localDir === 'SELL' && (ta.fvg === 'Bearish FVG' || ta.ob === 'Bearish OB' || ta.structure === 'Bearish'));
             
             // If strict alignment fails, return NO TRADE (null)
             if (localDir === 'NO_TRADE' || !hasInst) {
