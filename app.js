@@ -226,13 +226,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const trend = ema50 > ema200 ? 'Uptrend' : 'Downtrend';
                 const structure = closes[closes.length-1] > ema50 ? 'Bullish' : 'Bearish';
                 
-                let score = 50;
-                if(trend === 'Uptrend' && rsi < 70 && rsi > 40) score += 20;
-                if(trend === 'Downtrend' && rsi > 30 && rsi < 60) score -= 20;
-                if(fvg === 'Bullish FVG') score += 15;
-                if(fvg === 'Bearish FVG') score -= 15;
-                if(ob === 'Bullish OB') score += 15;
-                if(ob === 'Bearish OB') score -= 15;
+                let score = 75;
+                if(trend === 'Uptrend') score += 15; else score -= 15;
+                if(structure === 'Bullish') score += 10; else score -= 10;
+                if(fvg === 'Bullish FVG') score += 5; else if(fvg === 'Bearish FVG') score -= 5;
+                if(ob === 'Bullish OB') score += 5; else if(ob === 'Bearish OB') score -= 5;
                 
                 const analysis = {
                     rsi, ema50, ema200, atr, fvg, ob, trend, structure, score,
@@ -353,7 +351,44 @@ Return ONLY valid JSON format:
         async chat(q, sig) { return "OpenAI placeholder"; }
     };
 
+
+    // MACRO ANALYSIS ENGINE
+    // ============================================================
+    const Macro = {
+        evaluate(category) {
+            const ctx = state.macroContext || {};
+            let score = 50;
+            let notes = [];
+
+            if (ctx.overallSentiment === "usd_bullish") {
+                if (category === "gold") {
+                    score = 45;
+                    notes.push("??? ????? ??? ??? ?????");
+                } else if (category === "forex") {
+                    score = 55;
+                    notes.push("??? ??????? ???? ????? USD");
+                } else {
+                    score = 50;
+                    notes.push("????? ????? ???????");
+                }
+            } else {
+                notes.push("??????? ???? ??????? ??????");
+            }
+
+            return { score, notes };
+        },
+        summary() {
+            const ctx = state.macroContext || {};
+            return {
+                fedBias: ctx.fedBias || "??? ????",
+                geopolitics: ctx.geoRisk || "??? ????",
+                sentiment: ctx.overallSentiment || "neutral"
+            };
+        }
+    };
+
     // NEURAL SCANNER (COMBINES ALL ENGINES)
+
     // ============================================================
     const NeuralScanner = {
         async generate(assetKey, styleCode = 'daytrade') {
