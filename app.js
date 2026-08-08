@@ -391,12 +391,12 @@ Return ONLY valid JSON format:
 
     // ============================================================
     const NeuralScanner = {
-        async generate(assetKey, styleCode = 'daytrade') {
+        async generate(assetKey, styleCode = 'daytrade', explicitTfStr = null) {
             const asset = state.prices[assetKey];
             if (!asset) return null;
 
             const tfMap = { scalping: '15m', swing: '4h', hedger: '1d', daytrade: '1h', all: '1h' };
-            const tfStr = tfMap[styleCode] || '1h';
+            const tfStr = explicitTfStr || tfMap[styleCode] || '1h';
             
             const ta = await TA.analyzeAsync(assetKey, tfStr);
             const macEv = Macro.evaluate(asset.category);
@@ -1718,6 +1718,46 @@ Return ONLY valid JSON format:
     // ============================================================
     // TRADINGVIEW CHART & VISUAL OVERLAY LEVELS
     // ============================================================
+    let currentChartSymbol = 'OANDA:XAUUSD';
+    let currentChartTfTv = '60';
+    let currentChartTfAi = '1h';
+
+    async function syncChartAI(symbol, aiTfStr) {
+        const tagEl = document.getElementById('chart-overlay-asset-tag');
+        const entryEl = document.getElementById('chart-level-entry');
+        const tp1El = document.getElementById('chart-level-tp1');
+        const tp2El = document.getElementById('chart-level-tp2');
+        const slEl = document.getElementById('chart-level-sl');
+        
+        tagEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> الذكاء الاصطناعي يحلل فريم (${aiTfStr})...`;
+        
+        const cleanSym = symbol.replace('OANDA:', '').replace('TVC:', '').replace('FX:', '').replace('BINANCE:', '').replace('CAPITALCOM:', '').replace('USDT', 'USD');
+        
+        let assetKey = null;
+        for(let key in state.prices) {
+            if(key.includes(cleanSym) || cleanSym.includes(key)) {
+                assetKey = key; break;
+            }
+        }
+        if(!assetKey) assetKey = cleanSym;
+        
+        const sig = await NeuralScanner.generate(assetKey, 'daytrade', aiTfStr);
+        
+        if (sig && sig.action !== 'WAIT') {
+            tagEl.innerHTML = `<i class="fa-solid fa-crosshairs"></i> مستويات ${sig.symbol} الحية (${aiTfStr}):`;
+            entryEl.textContent = formatPrice(sig.entry, sig.asset);
+            tp1El.textContent = formatPrice(sig.tp1, sig.asset);
+            tp2El.textContent = formatPrice(sig.tp2, sig.asset);
+            slEl.textContent = formatPrice(sig.sl, sig.asset);
+        } else {
+            tagEl.innerHTML = `<i class="fa-solid fa-exclamation-circle"></i> لا توجد فرصة قوية حالياً على فريم ${aiTfStr}`;
+            entryEl.textContent = '—';
+            tp1El.textContent = '—';
+            tp2El.textContent = '—';
+            slEl.textContent = '—';
+        }
+    }
+
     function updateChartLevelsOverlay(symbol) {
         const tagEl = document.getElementById('chart-overlay-asset-tag');
         const entryEl = document.getElementById('chart-level-entry');
@@ -1738,21 +1778,42 @@ Return ONLY valid JSON format:
         slEl.textContent = formatPrice(sig.sl, sig.asset);
     }
 
-    function loadChart(symbol) {
-
+    function loadChart(symbol, interval = '60') {
+        currentChartSymbol = symbol;
         const ct = document.getElementById('tradingview_widget_container');
         if (!ct || !window.TradingView) return;
         ct.innerHTML = '';
         new window.TradingView.widget({
-            autosize: true, symbol, interval: '60', timezone: 'Asia/Riyadh',
+            autosize: true, symbol, interval: interval, timezone: 'Asia/Riyadh',
             theme: 'dark', style: '1', locale: 'ar', toolbar_bg: '#0f1623',
             enable_publishing: false, hide_side_toolbar: false,
-            allow_symbol_change: true, container_id: 'tradingview_widget_container'
+            allow_symbol_change: false, container_id: 'tradingview_widget_container',
+            studies: [
+                "RSI@tv-basicstudies",
+                "EMA@tv-basicstudies",
+                "MACD@tv-basicstudies",
+                "BollingerBands@tv-basicstudies"
+            ]
         });
         chartBtns.forEach(b => b.classList.toggle('active', b.getAttribute('data-symbol') === symbol));
-        updateChartLevelsOverlay(symbol);
     }
-    chartBtns.forEach(btn => btn.addEventListener('click', e => loadChart(e.currentTarget.getAttribute('data-symbol'))));
+    
+    chartBtns.forEach(btn => btn.addEventListener('click', async e => {
+        const sym = e.currentTarget.getAttribute('data-symbol');
+        loadChart(sym, currentChartTfTv);
+        await syncChartAI(sym, currentChartTfAi);
+    }));
+
+    document.querySelectorAll('.chart-tf-btn').forEach(btn => {
+        btn.addEventListener('click', async e => {
+            document.querySelectorAll('.chart-tf-btn').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            currentChartTfTv = e.currentTarget.getAttribute('data-tv');
+            currentChartTfAi = e.currentTarget.getAttribute('data-tf');
+            loadChart(currentChartSymbol, currentChartTfTv);
+            await syncChartAI(currentChartSymbol, currentChartTfAi);
+        });
+    });
 
     // ============================================================
     // CALCULATOR — FIX BUG-10
