@@ -35,6 +35,7 @@ price_cache = {
 }
 
 news_cache = []
+calendar_cache = []
 macro_cache = {
     'fedBias': 'neutral',
     'fedBiasLabel': 'محايد (Neutral)',
@@ -197,6 +198,41 @@ def fetch_macro_news():
         else:
             macro_cache['overallSentiment'] = 'neutral'
 
+
+def fetch_calendar():
+    try:
+        req = urllib.request.Request("https://nfs.faireconomy.media/ff_calendar_thisweek.xml", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            xml_data = response.read()
+        
+        root = ET.fromstring(xml_data)
+        events = []
+        for event in root.findall("event"):
+            title = event.findtext("title") or ""
+            country = event.findtext("country") or ""
+            date_str = event.findtext("date") or ""
+            time_str = event.findtext("time") or ""
+            impact = event.findtext("impact") or ""
+            forecast = event.findtext("forecast") or ""
+            previous = event.findtext("previous") or ""
+            
+            # Filter only High and Medium impact to keep UI clean
+            if impact in ["High", "Medium"]:
+                events.append({
+                    "title": title,
+                    "country": country,
+                    "date": date_str,
+                    "time": time_str,
+                    "impact": impact,
+                    "forecast": forecast,
+                    "previous": previous
+                })
+        with cache_lock:
+            calendar_cache.clear()
+            calendar_cache.extend(events)
+    except Exception as e:
+        print(f"[CALENDAR ERROR] {e}")
+
 def background_tradingview_worker():
     """Background worker updating TradingView prices every 5 seconds."""
     macro_timer = 0
@@ -205,6 +241,8 @@ def background_tradingview_worker():
             fetch_tradingview_live_prices()
             if macro_timer % MACRO_FETCH_INTERVAL == 0:
                 fetch_macro_news()
+            if macro_timer % 900 == 0:
+                fetch_calendar()
         except Exception as e:
             print(f"Worker exception: {e}")
         time.sleep(FETCH_INTERVAL)
@@ -213,6 +251,7 @@ def background_tradingview_worker():
 # Initial Immediate Fetch on Server Startup
 fetch_tradingview_live_prices()
 fetch_macro_news()
+fetch_calendar()
 
 # Start background thread
 worker = threading.Thread(target=background_tradingview_worker, daemon=True)
@@ -306,6 +345,16 @@ def get_macro():
         'status': 'success',
         'timestamp': time.time(),
         'macro': macro
+    })
+
+@app.route('/api/calendar', methods=['GET'])
+def get_calendar():
+    with cache_lock:
+        cal = list(calendar_cache)
+    return jsonify({
+        'status': 'success',
+        'timestamp': time.time(),
+        'calendar': cal
     })
 
 @app.route('/api/health', methods=['GET'])
