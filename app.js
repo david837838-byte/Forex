@@ -94,6 +94,20 @@ document.addEventListener('DOMContentLoaded', () => {
     let signalsData = [];
 
     let newsData = [];
+    let calendarData = [];
+
+    async function fetchCalendarData() {
+        try {
+            const res = await fetch('http://187.77.174.215:2200/api/calendar');
+            const data = await res.json();
+            if (data.status === 'success' && data.calendar) {
+                calendarData = data.calendar;
+                renderCalendar();
+            }
+        } catch(e) {
+            console.error("Error fetching calendar:", e);
+        }
+    }
 
     async function fetchLiveNews() {
         try {
@@ -1817,13 +1831,42 @@ Return ONLY valid JSON format:
     // ============================================================
     function renderCalendar() {
         if (!calendarTbody) return;
-        calendarTbody.innerHTML = [
-            { t: '14:30 UTC', c: '🇺🇸 USD', e: 'مؤشر أسعار المستهلك (CPI)', imp: 'high', ac: '0.3%', fc: '0.2%', pr: '0.1%', ef: 'إيجابي للدولار 🔴 على الذهب' },
-            { t: '14:30 UTC', c: '🇺🇸 USD', e: 'وظائف غير زراعيين (NFP)', imp: 'high', ac: '206K', fc: '195K', pr: '175K', ef: 'إيجابي للدولار — ضغط الذهب' },
-            { t: '18:00 UTC', c: '🇪🇺 EUR', e: 'قرار الفائدة الأوروبي (ECB)', imp: 'high', ac: '—', fc: '4.50%', pr: '4.50%', ef: 'محايد للعملة الموحدة' },
-            { t: '10:00 UTC', c: '🇬🇧 GBP', e: 'مؤشر PMI التصنيعي البريطاني', imp: 'medium', ac: '52.1', fc: '51.8', pr: '51.2', ef: 'إيجابي للجنيه الاسترليني' },
-            { t: '12:30 UTC', c: '🛢️ OIL', e: 'مخزونات النفط الأسبوعي (EIA)', imp: 'high', ac: '-2.1M', fc: '-1.5M', pr: '+0.8M', ef: 'إيجابي لأسعار النفط 🟢' }
-        ].map(ev => `<tr class="${ev.imp === 'high' ? 'high-impact-row' : ''}"><td>${ev.t}</td><td>${ev.c}</td><td>${ev.e}</td><td><span class="badge ${ev.imp === 'high' ? 'badge-live' : 'badge-warning'}">${ev.imp === 'high' ? 'عالي 🔴' : 'متوسط 🟡'}</span></td><td class="${ev.ac !== '—' ? 'text-success font-bold' : ''}">${ev.ac}</td><td>${ev.fc}</td><td>${ev.pr}</td><td style="font-size:0.78rem;color:var(--text-secondary);">${ev.ef}</td></tr>`).join('');
+        
+        const currencyFlags = { 'USD': '🇺🇸 USD', 'EUR': '🇪🇺 EUR', 'GBP': '🇬🇧 GBP', 'JPY': '🇯🇵 JPY', 'CAD': '🇨🇦 CAD', 'AUD': '🇦🇺 AUD', 'NZD': '🇳🇿 NZD', 'CHF': '🇨🇭 CHF', 'CNY': '🇨🇳 CNY' };
+        
+        if (calendarData.length === 0) {
+            calendarTbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted" style="padding: 2rem;">جارٍ تحميل الأجندة الاقتصادية الحية...</td></tr>`;
+            return;
+        }
+
+        calendarTbody.innerHTML = calendarData.slice(0, 15).map(ev => {
+            const impClass = ev.impact === 'High' ? 'high-impact-row' : '';
+            const badgeClass = ev.impact === 'High' ? 'badge-live' : 'badge-warning';
+            const badgeText = ev.impact === 'High' ? 'عالي 🔴' : 'متوسط 🟡';
+            
+            const curr = currencyFlags[ev.country] || ev.country;
+            
+            // Basic effect logic mapping
+            let effect = 'ترقب التأثير (AI)';
+            if (ev.country === 'USD' && ev.title.includes('CPI')) effect = 'مؤثر جداً على الدولار والذهب';
+            if (ev.country === 'USD' && ev.title.includes('Non-Farm')) effect = 'وظائف النون-فارم (سيولة عنيفة)';
+            if (ev.title.includes('Rate')) effect = 'قرار فـائـدة (تأثير مباشر)';
+            
+            const act = ev.actual || '—';
+            const fc = ev.forecast || '—';
+            const pr = ev.previous || '—';
+            
+            return `<tr class="${impClass}">
+                <td>${ev.date.slice(0,5)} ${ev.time}</td>
+                <td>${curr}</td>
+                <td style="font-size:0.9rem;">${ev.title}</td>
+                <td><span class="badge ${badgeClass}">${badgeText}</span></td>
+                <td class="${act !== '—' ? 'text-success font-bold' : ''}">${act}</td>
+                <td>${fc}</td>
+                <td>${pr}</td>
+                <td style="font-size:0.78rem;color:var(--text-secondary);">${effect}</td>
+            </tr>`;
+        }).join('');
     }
 
     // ============================================================
@@ -1844,6 +1887,7 @@ Return ONLY valid JSON format:
 
     async function autoRefreshSignalsEveryMinute() {
         updatePnL();
+        fetchCalendarData();
         await fetchMacroAndNews(); await generateAISignals();
         renderSignals();
         const lastScan = document.getElementById('last-scan-time');
@@ -1869,7 +1913,7 @@ Return ONLY valid JSON format:
     setInterval(autoRefreshSignalsEveryMinute, 60000); // 10-minute automatic AI signal refresh
     startStream();
 
-    updateSession(); updateTicker(); renderSignals(); renderNews(); renderCalendar();
+    updateSession(); updateTicker(); renderSignals(); renderNews(); fetchCalendarData();
     initCalc(); // FIX BUG-10
 
     setTimeout(() => loadChart('OANDA:XAUUSD'), 300);
