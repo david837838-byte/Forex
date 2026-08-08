@@ -97,15 +97,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function fetchLiveNews() {
         try {
-            // Using a reliable NewsAPI proxy that doesn't require keys or CORS bypass
-            const res = await fetch('https://saurav.tech/NewsAPI/top-headlines/category/business/us.json');
+            const res = await fetch('http://187.77.174.215:2200/api/news');
             const data = await res.json();
             
-            if (data.status === 'ok' && data.articles) {
-                // Filter out empty articles or non-English/junk
-                let validArticles = data.articles.filter(a => a.title && !a.title.includes('Removed'));
-                
-                newsData = validArticles.slice(0, 6).map(item => {
+            if (data.status === 'success' && data.news) {
+                newsData = data.news.slice(0, 6).map(item => {
                     let title = item.title;
                     let sentiment = 'أخبار عامة (AI)';
                     let sentimentType = 'neutral';
@@ -113,7 +109,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     let impactClass = 'badge-warning';
 
                     const tLower = title.toLowerCase();
-                    // AI Keyword analysis
                     if(tLower.includes('gold') || tLower.includes('xau')) { sentiment = 'مرتبط بالذهب'; sentimentType = 'gold-up'; }
                     else if(tLower.includes('usd') || tLower.includes('fed') || tLower.includes('rate') || tLower.includes('inflation')) { sentiment = 'مؤثر للدولار'; sentimentType = 'bearish'; impact = 'عالي التأثير'; impactClass = 'badge-live'; }
                     else if(tLower.includes('eur') || tLower.includes('ecb')) { sentiment = 'مرتبط باليورو'; sentimentType = 'bullish'; }
@@ -124,17 +119,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         impact = 'عالي التأثير جداً'; impactClass = 'badge-live';
                     }
 
-                    // Relative time
-                    let timeStr = 'اليوم';
-                    const pubDate = new Date(item.publishedAt);
-                    const now = new Date();
-                    const diffMins = Math.floor((now - pubDate) / 60000);
-                    if (diffMins < 60 && diffMins >= 0) timeStr = `منذ ${diffMins} دقيقة`;
-                    else if (diffMins < 1440 && diffMins >= 60) timeStr = `منذ ${Math.floor(diffMins/60)} ساعة`;
-                    else timeStr = "اليوم";
-
                     return {
-                        time: timeStr,
+                        time: item.pubDate || 'اليوم',
                         title: title,
                         sentiment: sentiment,
                         sentimentType: sentimentType,
