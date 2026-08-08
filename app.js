@@ -1913,7 +1913,7 @@ Return ONLY valid JSON format:
     setInterval(autoRefreshSignalsEveryMinute, 60000); // 10-minute automatic AI signal refresh
     startStream();
 
-    updateSession(); updateTicker(); renderSignals(); renderNews(); fetchCalendarData();
+    updateSession(); updateTicker(); renderSignals(); renderNews(); renderCalendar(); fetchCalendarData();
     initCalc(); // FIX BUG-10
 
     setTimeout(() => loadChart('OANDA:XAUUSD'), 300);
