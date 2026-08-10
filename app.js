@@ -222,6 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const adx = this.calcAdx(highs, lows, closes, 14);
                 
                 // SMC & Price Action
+                const swings = this.detectSwings(highs, lows, closes);
                 const fvg = this.detectFVG(candles);
                 const ob = this.detectOrderBlock(candles);
                 const trend = ema50 > ema200 ? 'Uptrend' : 'Downtrend';
@@ -240,6 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 const analysis = {
                     rsi, ema50, ema200, atr, adx, fvg, ob, trend, structure, marketRegime, score,
+                    lastSwingHigh: swings.lastSwingHigh, lastSwingLow: swings.lastSwingLow,
                     currentPrice: closes[closes.length-1]
                 };
                 
@@ -315,6 +317,28 @@ document.addEventListener('DOMContentLoaded', () => {
             let dx = 100 * Math.abs(pDi - nDi) / (pDi + nDi || 1);
             return parseFloat(dx.toFixed(2));
         },
+        detectSwings(highs, lows, closes) {
+            let lastSwingHigh = null;
+            let lastSwingLow = null;
+            
+            // Scan backwards to find the most recent swing high and swing low
+            for(let i = closes.length - 3; i >= 2; i--) {
+                const isSwingHigh = highs[i] > highs[i-1] && highs[i] > highs[i-2] && highs[i] > highs[i+1] && highs[i] > highs[i+2];
+                const isSwingLow = lows[i] < lows[i-1] && lows[i] < lows[i-2] && lows[i] < lows[i+1] && lows[i] < lows[i+2];
+                
+                if (isSwingHigh && !lastSwingHigh) lastSwingHigh = highs[i];
+                if (isSwingLow && !lastSwingLow) lastSwingLow = lows[i];
+                
+                if (lastSwingHigh && lastSwingLow) break;
+            }
+            
+            // Fallbacks in case of straight trends
+            if (!lastSwingHigh) lastSwingHigh = Math.max(...highs.slice(-20));
+            if (!lastSwingLow) lastSwingLow = Math.min(...lows.slice(-20));
+            
+            return { lastSwingHigh, lastSwingLow };
+        },
+
 
         
         detectFVG(candles) {
@@ -444,7 +468,15 @@ Return ONLY valid JSON format:
             const tfMap = { scalping: '15m', swing: '4h', hedger: '1d', daytrade: '1h', all: '1h' };
             const tfStr = explicitTfStr || tfMap[styleCode] || '1h';
             
+            // Phase 2: Multi-Timeframe (MTF) Alignment
+            let higherTf = '1d';
+            if (tfStr === '15m') higherTf = '4h';
+            else if (tfStr === '4h') higherTf = '1d';
+            else if (tfStr === '1d') higherTf = '1w'; // Optional if 1w exists, else we rely on 1d
+            
             const ta = await TA.analyzeAsync(assetKey, tfStr);
+            const higherTa = await TA.analyzeAsync(assetKey, higherTf);
+            
             // NO TRADE SYSTEM: Halt trading before high impact news
             if(Macro.hasHighImpactNews(assetKey) && !explicitTfStr) {
                 console.log(`[RISK MANAGEMENT] ${assetKey} rejected: High Impact news within 2 hours.`);
@@ -463,6 +495,15 @@ Return ONLY valid JSON format:
             // STRICT FILTER 2: FVG or OB Presence (must have at least one institutional alignment)
             const hasInst = (localDir === 'BUY' && (ta.fvg === 'Bullish FVG' || ta.ob === 'Bullish OB' || ta.structure === 'Bullish')) || (localDir === 'SELL' && (ta.fvg === 'Bearish FVG' || ta.ob === 'Bearish OB' || ta.structure === 'Bearish'));
             
+            // Phase 2 MTF Filter: Reject if Higher Timeframe Trend disagrees with our signal
+            if (localDir !== 'NO_TRADE' && higherTa) {
+                const higherTrendDir = higherTa.trend === 'Uptrend' ? 'BUY' : 'SELL';
+                if (localDir !== higherTrendDir) {
+                    console.log(`[MTF FILTER] ${assetKey} rejected: 1H/15m (${localDir}) vs 4H/1D (${higherTrendDir})`);
+                    if (!explicitTfStr) return null; // Only bypass if manually requested
+                }
+            }
+
             // If strict alignment fails, return NO TRADE (null) for global scanner
             if (localDir === 'NO_TRADE' || !hasInst) {
                 console.log(`[STRICT FILTER] ${assetKey} rejected: Trend=${ta.trend}, Structure=${ta.structure}, Inst=${ta.fvg}/${ta.ob}`);
@@ -495,24 +536,49 @@ Return ONLY valid JSON format:
             // STRICT FILTER 3: Calibrated Confidence threshold
             if (conf < 58 && !explicitTfStr) return null;
 
-            // TP/SL Dynamic offsets using ATR
+            // Phase 2: Market Structure Dynamic TP/SL (Swing High/Low)
             const p = asset.price || ta.currentPrice;
             const atr = ta.atr > 0 ? ta.atr : p * 0.005;
-            
-            const entry = p; // Market Execution
             const dp = asset.category === 'forex' ? 4 : 2;
+            const entry = p; // Market Execution
             
-            const slDist = atr * 1.5;
-            const tp1Dist = atr * 1.5;
-            const tp2Dist = atr * 3.0;
-            const tp3Dist = atr * 5.0;
+            let sl, tp1, tp2, tp3;
+            if (isBuy) {
+                // Place SL slightly below the last Swing Low for protection
+                sl = ta.lastSwingLow ? ta.lastSwingLow - (atr * 0.5) : entry - (atr * 1.5);
+                // If SL is too tight or wrong due to data gap, enforce minimum ATR distance
+                if (entry - sl < atr) sl = entry - atr; 
+                
+                const riskDist = entry - sl;
+                tp1 = entry + riskDist; // 1:1 R:R
+                tp2 = ta.lastSwingHigh && ta.lastSwingHigh > tp1 ? ta.lastSwingHigh : entry + (riskDist * 2);
+                tp3 = entry + (riskDist * 3);
+            } else {
+                // Place SL slightly above the last Swing High
+                sl = ta.lastSwingHigh ? ta.lastSwingHigh + (atr * 0.5) : entry + (atr * 1.5);
+                if (sl - entry < atr) sl = entry + atr;
+                
+                const riskDist = sl - entry;
+                tp1 = entry - riskDist;
+                tp2 = ta.lastSwingLow && ta.lastSwingLow < tp1 ? ta.lastSwingLow : entry - (riskDist * 2);
+                tp3 = entry - (riskDist * 3);
+            }
 
-            const tp1 = parseFloat((isBuy ? entry + tp1Dist : entry - tp1Dist).toFixed(dp));
-            const tp2 = parseFloat((isBuy ? entry + tp2Dist : entry - tp2Dist).toFixed(dp));
-            const tp3 = parseFloat((isBuy ? entry + tp3Dist : entry - tp3Dist).toFixed(dp));
-            const sl = parseFloat((isBuy ? entry - slDist : entry + slDist).toFixed(dp));
+            sl = parseFloat(sl.toFixed(dp));
+            tp1 = parseFloat(tp1.toFixed(dp));
+            tp2 = parseFloat(tp2.toFixed(dp));
+            tp3 = parseFloat(tp3.toFixed(dp));
             
-            const rrNum = tp3Dist / slDist;
+            const slDistFinal = Math.abs(entry - sl);
+            const tp1DistFinal = Math.abs(entry - tp1);
+            
+            // Phase 2 Risk/Reward Filter: Reject bad trades
+            if (tp1DistFinal < slDistFinal * 0.8 && !explicitTfStr) {
+                console.log(`[R/R FILTER] ${assetKey} rejected: Reward (${tp1DistFinal}) < Risk (${slDistFinal})`);
+                return null;
+            }
+            
+            const rrNum = Math.abs(entry - tp3) / slDistFinal;
             const rr = `1 : ${rrNum.toFixed(1)}`;
 
             const styleMap = { scalping: '???????? (15M)', swing: '?????? (4H/Daily)', hedger: '???? ?????? (1D)', daytrade: '????? ???? (1H)', all: '????? ???? (1H)' };
