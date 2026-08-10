@@ -513,6 +513,15 @@ Return ONLY valid JSON format:
             if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum, localDir);
             if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum, localDir);
 
+            // USER RULE: AI MUST NOT BE BYPASSED
+            if (state.aiConfig.geminiKey && !gemRes) {
+                console.log(`[AI REQUIRED] ${assetKey} rejected: Gemini AI failed to respond or API Key is invalid.`);
+                if (!explicitTfStr) return null;
+            }
+            if (state.aiConfig.openaiKey && !oaiRes) {
+                console.log(`[AI REQUIRED] ${assetKey} rejected: OpenAI failed to respond or API Key is invalid.`);
+                if (!explicitTfStr) return null;
+            }
             let dir = gemRes?.direction || localDir;
             if (dir !== localDir) {
                 console.log(`[STRICT FILTER] ${assetKey} rejected: AI direction (${dir}) conflicts with Technical direction (${localDir})`);
