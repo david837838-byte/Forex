@@ -1762,23 +1762,50 @@ Return ONLY valid JSON format:
     }
 
     if (aiChatSend && aiChatInput) {
-        const handleSend = () => {
+        const handleSend = async () => {
             const text = aiChatInput.value.trim();
             if (!text) return;
             addAiMessage(text, true);
             aiChatInput.value = '';
 
-            setTimeout(() => {
-                const responses = [
-                    "يجب دائماً مراعاة إدارة رأس المال بصرامة (1% - 2% من الحساب في الصفقة الواحدة).",
-                    "نحن نعتمد في تحليلنا على مناطق تدفق السيولة (SMC) واختلال التوازن (FVG).",
-                    "يرجى الانتظار لحين صدور فرصة ذهبية. الصبر هو مفتاح التداول الناجح.",
-                    "السوق يعكس حالياً حالة من التذبذب بانتظار بيانات اقتصادية هامة. توخ الحذر.",
-                    "تذكر أن الهدف الأساسي هو اقتناص الفرص العالية الجودة وليس التداول المستمر طوال اليوم."
-                ];
-                const res = responses[Math.floor(Math.random() * responses.length)];
-                addAiMessage(res, false);
-            }, 800);
+            const key = state.aiConfig.geminiKey;
+            if (!key) {
+                addAiMessage("يرجى إعداد مفتاح API الخاص بـ Gemini أولاً في إعدادات الآدمن.", false);
+                return;
+            }
+
+            const loaderId = "loader-" + Date.now();
+            const aiChatMessages = document.getElementById("ai-chat-messages");
+            const loaderDiv = document.createElement("div");
+            loaderDiv.id = loaderId;
+            loaderDiv.className = "ai-msg ai";
+            loaderDiv.innerHTML = "<i class=\"fa-solid fa-spinner fa-spin\"></i> الذكاء الاصطناعي يحلل...";
+            aiChatMessages.appendChild(loaderDiv);
+            aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
+
+            try {
+                const prompt = "أنت مساعد تداول ذكي محترف في أسواق الفوركس والذهب. المستخدم يسأل: " + text + "
+أجب باللغة العربية باحترافية واختصار.";
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${key}`, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ contents: [{parts: [{text: prompt}]}] })
+                });
+                
+                document.getElementById(loaderId)?.remove();
+                
+                if (!res.ok) {
+                    addAiMessage("عذراً، فشل الاتصال بالذكاء الاصطناعي. تأكد من صحة المفتاح.", false);
+                    return;
+                }
+                
+                const data = await res.json();
+                const textResult = data.candidates[0].content.parts[0].text.replace(/```json/g, "").replace(/```/g, "").trim();
+                addAiMessage(textResult, false);
+            } catch(e) {
+                document.getElementById(loaderId)?.remove();
+                addAiMessage("حدث خطأ في الاتصال بالشبكة.", false);
+            }
         };
         aiChatSend.addEventListener('click', handleSend);
         aiChatInput.addEventListener('keypress', (e) => {
