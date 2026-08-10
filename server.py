@@ -367,6 +367,7 @@ def health():
 
 
 import numpy as np
+import pandas as pd
 
 def bt_calc_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
