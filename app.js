@@ -1977,7 +1977,7 @@ Return ONLY valid JSON format:
     updateSession(); updateTicker(); renderSignals(); renderNews(); renderCalendar(); fetchCalendarData();
     initCalc(); // FIX BUG-10
 
-    setTimeout(() => loadChart('OANDA:XAUUSD'), 300);
+    setTimeout(() => { loadChart('OANDA:XAUUSD'); syncChartAI('OANDA:XAUUSD', currentChartTfAi); }, 300);
 
     calendarImpactBtns.forEach(btn => btn.addEventListener('click', e => { calendarImpactBtns.forEach(b => b.classList.remove('active')); e.currentTarget.classList.add('active'); }));
     if (document.getElementById('asset-modal-close-btn') && document.getElementById('asset-selector-modal')) {
