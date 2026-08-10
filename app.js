@@ -438,7 +438,7 @@ Return ONLY valid JSON format:
             if (conf < 60) return null;
 
             // TP/SL Dynamic offsets using ATR
-            const p = ta.currentPrice || asset.price;
+            const p = asset.price || ta.currentPrice;
             const atr = ta.atr > 0 ? ta.atr : p * 0.005;
             
             const entry = p; // Market Execution
