@@ -473,7 +473,7 @@ Return ONLY valid JSON format:
             
             const ta = await TA.analyzeAsync(assetKey, tfStr);
             const higherTa = await TA.analyzeAsync(assetKey, higherTf);
-            if (!ta) return null;
+            if (!ta) { console.log(`[DEBUG] ${assetKey} rejected: ta is null`); return null; }
             
             // NO TRADE SYSTEM: Halt trading before high impact news
             if(Macro.hasHighImpactNews(assetKey) && !explicitTfStr) {
@@ -541,7 +541,7 @@ Return ONLY valid JSON format:
                 } else {
                     baseWinRate = ta.score; // Fallback to local score if endpoint fails
                 }
-            } catch(e) { baseWinRate = ta.score; }
+            } catch(e) { console.error("[BACKTEST ERROR]", e); baseWinRate = ta.score; }
             
             let conf = baseWinRate + mtfPenalty;
             
@@ -552,14 +552,14 @@ Return ONLY valid JSON format:
             // If the news impact is brutally negative, we can reject the trade entirely
             if (gemRes && gemRes.impactScore <= -3.0) {
                 console.log(`[MACRO FILTER] ${assetKey} rejected: AI determined news is heavily against trade (${gemRes.impactScore})`);
-                if(!explicitTfStr) return null;
+                if(!explicitTfStr) { console.log(`[DEBUG] ${assetKey} rejected at point 1`); return null; }
             }
             
             conf = Math.min(85.0, conf); // Max possible is 85% with all stars aligned
             conf = parseFloat(conf.toFixed(1));
 
             // STRICT FILTER 3: Calibrated Confidence threshold
-            if (conf < 40 && !explicitTfStr) return null; // Relaxed from 58 to 50
+            if (conf < 40 && !explicitTfStr) { console.log(`[DEBUG] ${assetKey} rejected: conf < 40 (${conf})`); return null; } // Relaxed from 58 to 50
 
             // Phase 2: Market Structure Dynamic TP/SL (Swing High/Low)
             const p = asset.price || ta.currentPrice;
