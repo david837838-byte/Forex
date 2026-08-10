@@ -1784,8 +1784,7 @@ Return ONLY valid JSON format:
             aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
 
             try {
-                const prompt = "أنت مساعد تداول ذكي محترف في أسواق الفوركس والذهب. المستخدم يسأل: " + text + "
-أجب باللغة العربية باحترافية واختصار.";
+                const prompt = "أنت مساعد تداول ذكي محترف في أسواق الفوركس والذهب. المستخدم يسأل: " + text + "\\nأجب باللغة العربية باحترافية واختصار.";
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${key}`, {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
