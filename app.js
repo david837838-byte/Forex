@@ -361,7 +361,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const GeminiAI = {
         async analyze(assetKey, ta, macSum, localDir) {
             const key = state.aiConfig.geminiKey;
-            const model = state.aiConfig.geminiModel || 'gemini-1.5-flash';
+            const model = 'gemini-1.5-flash';
             if(!key) return null;
             
             const prompt = `You are an AI Trading Assistant.
