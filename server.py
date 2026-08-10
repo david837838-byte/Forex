@@ -365,6 +365,97 @@ def health():
         'symbols_count': len(price_cache['data'])
     })
 
+
+import numpy as np
+
+def bt_calc_ema(series, period):
+    return series.ewm(span=period, adjust=False).mean()
+
+def bt_calc_atr(df, period=14):
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    return true_range.rolling(period).mean()
+
+def bt_calc_adx(df, period=14):
+    up_move = df['High'] - df['High'].shift(1)
+    down_move = df['Low'].shift(1) - df['Low']
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    tr = bt_calc_atr(df, 1)
+    tr_sum = pd.Series(tr).rolling(period).sum()
+    plus_di = 100 * (pd.Series(plus_dm.flatten()).rolling(period).sum() / tr_sum.reset_index(drop=True))
+    minus_di = 100 * (pd.Series(minus_dm.flatten()).rolling(period).sum() / tr_sum.reset_index(drop=True))
+    dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
+    adx = dx.rolling(period).mean()
+    adx.index = df.index
+    return adx
+
+@app.route('/api/backtest', methods=['GET'])
+def api_backtest():
+    symbol = request.args.get('symbol', 'XAUUSD')
+    timeframe = request.args.get('timeframe', '1h')
+    
+    yf_symbol = symbol
+    if symbol == 'XAUUSD': yf_symbol = 'GC=F'
+    elif symbol == 'XAGUSD': yf_symbol = 'SI=F'
+    elif symbol == 'USOIL': yf_symbol = 'CL=F'
+    elif symbol == 'EURUSD': yf_symbol = 'EURUSD=X'
+    elif symbol == 'BTCUSDT' or symbol == 'BTCUSD': yf_symbol = 'BTC-USD'
+    else: return jsonify({'status': 'error', 'message': 'Asset not supported for backtest yet'})
+    
+    interval, period = ('1h', '60d')
+    if timeframe == '15m': interval, period = ('15m', '30d')
+    elif timeframe == '4h': interval, period = ('1h', '60d')
+    
+    try:
+        df = yf.download(yf_symbol, period=period, interval=interval, progress=False)
+        if df.empty: return jsonify({'status': 'error', 'message': 'No data'})
+        
+        df['EMA50'] = bt_calc_ema(df['Close'], 50)
+        df['EMA200'] = bt_calc_ema(df['Close'], 200)
+        df['ATR'] = bt_calc_atr(df, 14)
+        df['ADX'] = bt_calc_adx(df, 14)
+        df.dropna(inplace=True)
+        
+        wins = 0; losses = 0; open_trades = []
+        for i in range(len(df)):
+            row = df.iloc[i]
+            new_open_trades = []
+            for t in open_trades:
+                if t['type'] == 'BUY':
+                    if row['Low'].iloc[0] <= t['sl']: losses += 1
+                    elif row['High'].iloc[0] >= t['tp1']: wins += 1
+                    else: new_open_trades.append(t)
+                else:
+                    if row['High'].iloc[0] >= t['sl']: losses += 1
+                    elif row['Low'].iloc[0] <= t['tp1']: wins += 1
+                    else: new_open_trades.append(t)
+            open_trades = new_open_trades
+            
+            trend = 'Uptrend' if row['EMA50'].iloc[0] > row['EMA200'].iloc[0] else 'Downtrend'
+            structure = 'Bullish' if row['Close'].iloc[0] > row['EMA50'].iloc[0] else 'Bearish'
+            adx = row['ADX'].iloc[0]
+            
+            local_dir = 'NO_TRADE'
+            if trend == 'Uptrend' and structure == 'Bullish' and adx > 25: local_dir = 'BUY'
+            elif trend == 'Downtrend' and structure == 'Bearish' and adx > 25: local_dir = 'SELL'
+            
+            if local_dir != 'NO_TRADE' and len(open_trades) == 0:
+                p = row['Close'].iloc[0]
+                atr = row['ATR'].iloc[0]
+                tp1 = p + (atr*1.5) if local_dir == 'BUY' else p - (atr*1.5)
+                sl = p - (atr*1.5) if local_dir == 'BUY' else p + (atr*1.5)
+                open_trades.append({'type': local_dir, 'entry': p, 'tp1': tp1, 'sl': sl})
+                
+        win_rate = (wins / (wins + losses)) * 100 if (wins + losses) > 0 else 50.0
+        return jsonify({'status': 'success', 'winRate': round(win_rate, 2), 'trades': wins+losses})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+
 if __name__ == '__main__':
     print(f"MarketPulse FX TradingView Server running on http://0.0.0.0:2200")
     app.run(host='0.0.0.0', port=2200, debug=False)

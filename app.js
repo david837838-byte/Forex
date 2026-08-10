@@ -254,10 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         
         fallback(assetKey) {
-            const p = state.prices[assetKey]?.price || 0;
-            const res = { rsi: 50, ema50: p, ema200: p, atr: p*0.005, adx: 20, fvg: 'None', ob: 'None', trend: 'Neutral', structure: 'Neutral', marketRegime: 'Ranging / Chop', score: 50, currentPrice: p };
-            this.cache[assetKey] = res;
-            return res;
+            return null;
         },
         
         analyze(assetKey) {
@@ -476,6 +473,7 @@ Return ONLY valid JSON format:
             
             const ta = await TA.analyzeAsync(assetKey, tfStr);
             const higherTa = await TA.analyzeAsync(assetKey, higherTf);
+            if (!ta) return null;
             
             // NO TRADE SYSTEM: Halt trading before high impact news
             if(Macro.hasHighImpactNews(assetKey) && !explicitTfStr) {
@@ -523,14 +521,32 @@ Return ONLY valid JSON format:
             }
 
             const isBuy = dir === 'BUY';
-            let conf = ta.score; // Start with quantitative edge
-            if (gemRes && gemRes.direction === localDir) conf += 4;
-            if (oaiRes && oaiRes.direction === dir) conf += 4;
-            if (macEv > 60 && localDir === 'BUY') conf += 3;
-            if (macEv < 40 && localDir === 'SELL') conf += 3;
             
-            // Cap confidence at a mathematically realistic 75-80% for single-asset TA
-            conf = Math.min(78.5, conf);
+            // PHASE 3: Fetch true win rate from backtester endpoint
+            let baseWinRate = 50.0;
+            try {
+                const btRes = await fetch(`http://187.77.174.215:2200/api/backtest?symbol=${assetKey}&timeframe=${tfStr}`);
+                const btData = await btRes.json();
+                if(btData.status === 'success') {
+                    baseWinRate = btData.winRate;
+                } else {
+                    baseWinRate = ta.score; // Fallback to local score if endpoint fails
+                }
+            } catch(e) { baseWinRate = ta.score; }
+            
+            let conf = baseWinRate;
+            
+            // PHASE 3: Deep AI Macro parsing (adds dynamic JSON impactScore)
+            if (gemRes && typeof gemRes.impactScore === "number") conf += gemRes.impactScore;
+            if (oaiRes && typeof oaiRes.impactScore === "number") conf += oaiRes.impactScore;
+            
+            // If the news impact is brutally negative, we can reject the trade entirely
+            if (gemRes && gemRes.impactScore <= -3.0) {
+                console.log(`[MACRO FILTER] ${assetKey} rejected: AI determined news is heavily against trade (${gemRes.impactScore})`);
+                if(!explicitTfStr) return null;
+            }
+            
+            conf = Math.min(85.0, conf); // Max possible is 85% with all stars aligned
             conf = parseFloat(conf.toFixed(1));
 
             // STRICT FILTER 3: Calibrated Confidence threshold
@@ -544,20 +560,17 @@ Return ONLY valid JSON format:
             
             let sl, tp1, tp2, tp3;
             if (isBuy) {
-                // Place SL slightly below the last Swing Low for protection
-                sl = ta.lastSwingLow ? ta.lastSwingLow - (atr * 0.5) : entry - (atr * 1.5);
-                // If SL is too tight or wrong due to data gap, enforce minimum ATR distance
+                if (!ta.lastSwingLow) return null; // STRICT STRUCTURE: No swing low = NO TRADE
+                sl = ta.lastSwingLow - (atr * 0.5);
                 if (entry - sl < atr) sl = entry - atr; 
-                
                 const riskDist = entry - sl;
-                tp1 = entry + riskDist; // 1:1 R:R
+                tp1 = entry + riskDist; 
                 tp2 = ta.lastSwingHigh && ta.lastSwingHigh > tp1 ? ta.lastSwingHigh : entry + (riskDist * 2);
                 tp3 = entry + (riskDist * 3);
             } else {
-                // Place SL slightly above the last Swing High
-                sl = ta.lastSwingHigh ? ta.lastSwingHigh + (atr * 0.5) : entry + (atr * 1.5);
+                if (!ta.lastSwingHigh) return null; // STRICT STRUCTURE: No swing high = NO TRADE
+                sl = ta.lastSwingHigh + (atr * 0.5);
                 if (sl - entry < atr) sl = entry + atr;
-                
                 const riskDist = sl - entry;
                 tp1 = entry - riskDist;
                 tp2 = ta.lastSwingLow && ta.lastSwingLow < tp1 ? ta.lastSwingLow : entry - (riskDist * 2);
