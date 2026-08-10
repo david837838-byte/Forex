@@ -412,20 +412,22 @@ Return ONLY valid JSON format:
             // STRICT FILTER 2: FVG or OB Presence (must have at least one institutional alignment)
             const hasInst = (localDir === 'BUY' && (ta.fvg === 'Bullish FVG' || ta.ob === 'Bullish OB' || ta.structure === 'Bullish')) || (localDir === 'SELL' && (ta.fvg === 'Bearish FVG' || ta.ob === 'Bearish OB' || ta.structure === 'Bearish'));
             
-            // If strict alignment fails, return NO TRADE (null)
+            // If strict alignment fails, return NO TRADE (null) for global scanner
             if (localDir === 'NO_TRADE' || !hasInst) {
                 console.log(`[STRICT FILTER] ${assetKey} rejected: Trend=${ta.trend}, Structure=${ta.structure}, Inst=${ta.fvg}/${ta.ob}`);
-                return null; 
+                if (!explicitTfStr) return null; 
+                localDir = ta.trend === 'Uptrend' ? 'BUY' : 'SELL';
             }
 
             let gemRes = null, oaiRes = null;
             if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum, localDir);
             if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum, localDir);
 
-            const dir = gemRes?.direction || localDir;
+            let dir = gemRes?.direction || localDir;
             if (dir !== localDir) {
                 console.log(`[STRICT FILTER] ${assetKey} rejected: AI direction (${dir}) conflicts with Technical direction (${localDir})`);
-                return null;
+                if (!explicitTfStr) return null;
+                dir = localDir; // Fallback to technical direction for forced chart analysis
             }
 
             const isBuy = dir === 'BUY';
@@ -435,7 +437,7 @@ Return ONLY valid JSON format:
             conf = parseFloat(conf.toFixed(1));
 
             // STRICT FILTER 3: Confidence threshold
-            if (conf < 60) return null;
+            if (conf < 60 && !explicitTfStr) return null;
 
             // TP/SL Dynamic offsets using ATR
             const p = asset.price || ta.currentPrice;
