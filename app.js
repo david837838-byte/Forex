@@ -227,7 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const ob = this.detectOrderBlock(candles);
                 const trend = ema50 > ema200 ? 'Uptrend' : 'Downtrend';
                 const structure = closes[closes.length-1] > ema50 ? 'Bullish' : 'Bearish';
-                const marketRegime = adx > 25 ? (trend === 'Uptrend' ? 'Strong Uptrend' : 'Strong Downtrend') : 'Ranging / Chop';
+                const marketRegime = adx > 20 ? (trend === 'Uptrend' ? 'Strong Uptrend' : 'Strong Downtrend') : 'Ranging / Chop';
                 
                 // CALIBRATED QUANTITATIVE SCORING (Based on Backtest Results)
                 // Base probability of a trend-following setup is ~54%.
@@ -493,12 +493,12 @@ Return ONLY valid JSON format:
             // STRICT FILTER 2: FVG or OB Presence (must have at least one institutional alignment)
             const hasInst = (localDir === 'BUY' && (ta.fvg === 'Bullish FVG' || ta.ob === 'Bullish OB' || ta.structure === 'Bullish')) || (localDir === 'SELL' && (ta.fvg === 'Bearish FVG' || ta.ob === 'Bearish OB' || ta.structure === 'Bearish'));
             
-            // Phase 2 MTF Filter: Reject if Higher Timeframe Trend disagrees with our signal
+            // Phase 2 MTF Filter: Deduct confidence if Higher Timeframe Trend disagrees (Relaxed)
+            let mtfPenalty = 0;
             if (localDir !== 'NO_TRADE' && higherTa) {
                 const higherTrendDir = higherTa.trend === 'Uptrend' ? 'BUY' : 'SELL';
                 if (localDir !== higherTrendDir) {
-                    console.log(`[MTF FILTER] ${assetKey} rejected: 1H/15m (${localDir}) vs 4H/1D (${higherTrendDir})`);
-                    if (!explicitTfStr) return null; // Only bypass if manually requested
+                    mtfPenalty = -5; // Just penalize, don't reject completely
                 }
             }
 
@@ -534,7 +534,7 @@ Return ONLY valid JSON format:
                 }
             } catch(e) { baseWinRate = ta.score; }
             
-            let conf = baseWinRate;
+            let conf = baseWinRate + mtfPenalty;
             
             // PHASE 3: Deep AI Macro parsing (adds dynamic JSON impactScore)
             if (gemRes && typeof gemRes.impactScore === "number") conf += gemRes.impactScore;
@@ -550,7 +550,7 @@ Return ONLY valid JSON format:
             conf = parseFloat(conf.toFixed(1));
 
             // STRICT FILTER 3: Calibrated Confidence threshold
-            if (conf < 58 && !explicitTfStr) return null;
+            if (conf < 50 && !explicitTfStr) return null; // Relaxed from 58 to 50
 
             // Phase 2: Market Structure Dynamic TP/SL (Swing High/Low)
             const p = asset.price || ta.currentPrice;
@@ -560,16 +560,14 @@ Return ONLY valid JSON format:
             
             let sl, tp1, tp2, tp3;
             if (isBuy) {
-                if (!ta.lastSwingLow) return null; // STRICT STRUCTURE: No swing low = NO TRADE
-                sl = ta.lastSwingLow - (atr * 0.5);
+                sl = ta.lastSwingLow ? ta.lastSwingLow - (atr * 0.5) : entry - (atr * 1.5); // Relaxed: ATR Fallback restored
                 if (entry - sl < atr) sl = entry - atr; 
                 const riskDist = entry - sl;
                 tp1 = entry + riskDist; 
                 tp2 = ta.lastSwingHigh && ta.lastSwingHigh > tp1 ? ta.lastSwingHigh : entry + (riskDist * 2);
                 tp3 = entry + (riskDist * 3);
             } else {
-                if (!ta.lastSwingHigh) return null; // STRICT STRUCTURE: No swing high = NO TRADE
-                sl = ta.lastSwingHigh + (atr * 0.5);
+                sl = ta.lastSwingHigh ? ta.lastSwingHigh + (atr * 0.5) : entry + (atr * 1.5); // Relaxed: ATR Fallback restored
                 if (sl - entry < atr) sl = entry + atr;
                 const riskDist = sl - entry;
                 tp1 = entry - riskDist;
@@ -586,7 +584,7 @@ Return ONLY valid JSON format:
             const tp1DistFinal = Math.abs(entry - tp1);
             
             // Phase 2 Risk/Reward Filter: Reject bad trades
-            if (tp1DistFinal < slDistFinal * 0.8 && !explicitTfStr) {
+            if (tp1DistFinal < slDistFinal * 0.4 && !explicitTfStr) { // Relaxed R/R filter
                 console.log(`[R/R FILTER] ${assetKey} rejected: Reward (${tp1DistFinal}) < Risk (${slDistFinal})`);
                 return null;
             }
