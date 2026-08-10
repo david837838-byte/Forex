@@ -502,10 +502,10 @@ Return ONLY valid JSON format:
                 }
             }
 
-            // If strict alignment fails, return NO TRADE (null) for global scanner
+            // STRICT FILTER 2 (RELAXED): Only warn if alignment fails, do not reject.
             if (localDir === 'NO_TRADE' || !hasInst) {
-                console.log(`[STRICT FILTER] ${assetKey} rejected: Trend=${ta.trend}, Structure=${ta.structure}, Inst=${ta.fvg}/${ta.ob}`);
-                if (!explicitTfStr) return null; 
+                console.log(`[STRICT FILTER WARNING] ${assetKey} not perfectly aligned: Trend=${ta.trend}, Structure=${ta.structure}`);
+                // Fallback to Trend direction to ensure a signal is generated
                 localDir = ta.trend === 'Uptrend' ? 'BUY' : 'SELL';
             }
 
@@ -550,7 +550,7 @@ Return ONLY valid JSON format:
             conf = parseFloat(conf.toFixed(1));
 
             // STRICT FILTER 3: Calibrated Confidence threshold
-            if (conf < 50 && !explicitTfStr) return null; // Relaxed from 58 to 50
+            if (conf < 40 && !explicitTfStr) return null; // Relaxed from 58 to 50
 
             // Phase 2: Market Structure Dynamic TP/SL (Swing High/Low)
             const p = asset.price || ta.currentPrice;
