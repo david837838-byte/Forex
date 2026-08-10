@@ -302,7 +302,7 @@ def get_ohlcv():
     elif symbol == 'SPX500': yf_symbol = '^GSPC'
     elif symbol == 'NAS100': yf_symbol = '^IXIC'
     
-    interval_map = {'15m': ('15m', '5d'), '1h': ('1h', '10d'), '4h': ('1h', '30d'), '1d': ('1d', '60d')}
+    interval_map = {'15m': ('15m', '30d'), '1h': ('1h', '60d'), '4h': ('1h', '60d'), '1d': ('1d', '2y')}
     interval, period = interval_map.get(timeframe, ('1h', '10d'))
     
     try:
