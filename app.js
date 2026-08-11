@@ -359,11 +359,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // AI ENGINES
     // ============================================================
     const GeminiAI = {
-        async analyze(assetKey, ta, macSum, localDir) {
+        async analyze(assetKey, ta, macSum, localDir, strictMode) {
             const key = state.aiConfig.geminiKey;
             const model = 'gemini-flash-latest';
             if(!key) return null;
             
+            const promptRule = strictMode 
+                ? `RULE: If the news heavily contradicts this ${localDir} trade, output NO_TRADE. Otherwise, output ${localDir}.`
+                : `RULE: This is an aggressive high-frequency scalping mode. Ignore minor news contradictions. ONLY output NO_TRADE if there is a massive market-breaking crash. Otherwise, MUST output ${localDir}.`;
+
             const prompt = `You are an AI Trading Assistant.
 Asset: ${assetKey}
 Technical Trend: ${localDir}
@@ -371,7 +375,7 @@ Technical Data: Trend=${ta.trend}, Structure=${ta.structure}, FVG=${ta.fvg}, OB=
 Recent News: ${JSON.stringify(macSum)}.
 
 Task: The technical engine suggests a ${localDir} trade. Do you agree based on the news?
-RULE: If the news heavily contradicts this ${localDir} trade, output NO_TRADE. Otherwise, output ${localDir}.
+${promptRule}
 
 Return ONLY valid JSON format:
 { "direction": "${localDir}", "confidence": 95, "techReasoning": "Looks good", "macroReasoning": "News supports it" }`;
@@ -510,8 +514,8 @@ Return ONLY valid JSON format:
             }
 
             let gemRes = null, oaiRes = null;
-            if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum, localDir);
-            if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum, localDir);
+            if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum, localDir, state.aiConfig.strictMode);
+            if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum, localDir, state.aiConfig.strictMode);
 
             // USER RULE: AI MUST NOT BE BYPASSED
             if (state.aiConfig.geminiKey && !gemRes) {
@@ -529,6 +533,7 @@ Return ONLY valid JSON format:
                 dir = localDir; // Fallback to technical direction for forced chart analysis
             }
 
+            if (dir === 'NO_TRADE') { console.log(`[DEBUG] ${assetKey} rejected: AI explicitly said NO_TRADE`); return null; }
             const isBuy = dir === 'BUY';
             
             // PHASE 3: Fetch true win rate from backtester endpoint
@@ -1082,7 +1087,8 @@ Return ONLY valid JSON format:
                 if (!asset || asset.price <= 0) continue;
 
                 const sig = await NeuralScanner.generate(key, traderStyle);
-                if (sig && sig.confidence >= state.aiConfig.minConfidence) {
+                const minConf = state.aiConfig.strictMode ? state.aiConfig.minConfidence : 15;
+                if (sig && sig.confidence >= minConf && sig.direction !== 'NO_TRADE') {
                     newSignals.push(sig);
                 }
                 
