@@ -1079,6 +1079,9 @@ Return ONLY valid JSON format:
             if (sig && sig.confidence >= state.aiConfig.minConfidence) {
                 newSignals.push(sig);
             }
+            
+            // 5 second delay between each asset to prevent Google Gemini API Rate Limiting (429 Too Many Requests)
+            await new Promise(r => setTimeout(r, 5000));
         }
 
         newSignals = newSignals.map(sig => {
