@@ -133,8 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         impact = 'عالي التأثير جداً'; impactClass = 'badge-live';
                     }
 
-                    console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
-            return {
+                    return {
                         time: item.pubDate || 'اليوم',
                         title: title,
                         sentiment: sentiment,
@@ -334,7 +333,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!lastSwingHigh) lastSwingHigh = Math.max(...highs.slice(-20));
             if (!lastSwingLow) lastSwingLow = Math.min(...lows.slice(-20));
             
-            console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
             return { lastSwingHigh, lastSwingLow };
         },
 
@@ -395,7 +393,6 @@ Return ONLY valid JSON format:
             }
         },
         async test(key, model) {
-            console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
             return {ok: true, msg: 'Connected successfully'};
         },
         async chat(q, sig) { return "Institutional analysis requires strict alignment. " + q; }
@@ -403,8 +400,7 @@ Return ONLY valid JSON format:
 
     const OpenAI_API = {
         async analyze(assetKey, ta, macSum, localDir) { return null; },
-        async test(key, model) { console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
-            return {ok: false, msg: 'Not implemented'}; },
+        async test(key, model) { return {ok: false, msg: 'Not implemented'}; },
         async chat(q, sig) { return "OpenAI placeholder"; }
     };
 
@@ -450,12 +446,10 @@ Return ONLY valid JSON format:
                 notes.push("??????? ???? ??????? ??????");
             }
 
-            console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
             return { score, notes };
         },
         summary() {
             const ctx = state.macroContext || {};
-            console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
             return {
                 fedBias: ctx.fedBias || "??? ????",
                 geopolitics: ctx.geoRisk || "??? ????",
@@ -628,7 +622,6 @@ Return ONLY valid JSON format:
             if (gemRes?.techReasoning) reasons.push(`[Tech]: ${gemRes.techReasoning}`);
             if (gemRes?.macroReasoning) reasons.push(`[Macro]: ${gemRes.macroReasoning}`);
             
-            console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
             return {
                 id: `sig-inst-${Date.now()}`, asset: asset.category, symbol: assetKey,
                 title: `${isBuy ? "????" : "???"} ${asset.name} (Institutional)`,
@@ -711,8 +704,7 @@ Return ONLY valid JSON format:
         let pct = range > 0 ? Math.min(100, Math.max(0, (pos / range) * 100)) : 0;
         if (diff > 0 && pct < 5) pct = 5;
 
-        console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
-            return { cp, pips, isProfit: pips >= 0, pct };
+        return { cp, pips, isProfit: pips >= 0, pct };
     }
 
     // ============================================================
@@ -1340,7 +1332,6 @@ Return ONLY valid JSON format:
         let adminLoggedIn = false;
 
         function getAdminCreds() {
-            console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
             return {
                 user: localStorage.getItem('mp_admin_user') || 'admin',
                 pass: localStorage.getItem('mp_admin_pass') || 'admin'
@@ -2132,16 +2123,13 @@ Return ONLY valid JSON format:
     // ============================================================
     const AntiFakeNewsEngine = {
         verifyHeadline(text) {
-            if (!text) console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
-            return { verified: true, score: 98 };
+            if (!text) return { verified: true, score: 98 };
             const rumorTerms = ['شائعات', 'تسريبات غير مؤكدة', 'مصدر غير مسمى', 'مصدر مجهول', 'rumor', 'unconfirmed', 'fake', 'alleged'];
             const t = text.toLowerCase();
             const hasRumor = rumorTerms.some(term => t.includes(term));
             if (hasRumor) {
-                console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
-            return { verified: false, score: 30, warning: '⚠️ خبر غير موثوق تم تحييده من التوصية' };
+                return { verified: false, score: 30, warning: '⚠️ خبر غير موثوق تم تحييده من التوصية' };
             }
-            console.log(`[DEBUG] SUCCESS: Generating signal for ${assetKey} with conf ${conf}`);
             return { verified: true, score: 97 };
         }
     };
