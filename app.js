@@ -1065,42 +1065,50 @@ Return ONLY valid JSON format:
     // ============================================================
     // 10-MINUTE DYNAMIC AI SIGNAL GENERATOR
     // ============================================================
+    let isScanning = false;
     async function generateAISignals() {
-        const traderStyle = state.activeTraderStyle || 'daytrade';
-        let newSignals = [];
-        const keysToScan = Object.keys(state.prices);
+        if (isScanning) return;
+        isScanning = true;
         
-        for (let i = 0; i < keysToScan.length; i++) {
-            const key = keysToScan[i];
-            const asset = state.prices[key];
-            if (!asset || asset.price <= 0) continue;
-
-            const sig = await NeuralScanner.generate(key, traderStyle);
-            if (sig && sig.confidence >= state.aiConfig.minConfidence) {
-                newSignals.push(sig);
-            }
+        try {
+            const traderStyle = state.activeTraderStyle || 'daytrade';
+            let newSignals = [];
+            const keysToScan = Object.keys(state.prices);
             
-            // 5 second delay between each asset to prevent Google Gemini API Rate Limiting (429 Too Many Requests)
-            await new Promise(r => setTimeout(r, 5000));
-        }
+            for (let i = 0; i < keysToScan.length; i++) {
+                const key = keysToScan[i];
+                const asset = state.prices[key];
+                if (!asset || asset.price <= 0) continue;
 
-        newSignals = newSignals.map(sig => {
-            if (state.favorites && state.favorites.includes(sig.symbol)) {
-                sig.confidence = Math.min(99.9, sig.confidence + 10);
-                sig.statusLabel = 'قوية وموثقة (مفضلة) 🌟';
+                const sig = await NeuralScanner.generate(key, traderStyle);
+                if (sig && sig.confidence >= state.aiConfig.minConfidence) {
+                    newSignals.push(sig);
+                }
+                
+                // 5 second delay between each asset to prevent Google Gemini API Rate Limiting (429 Too Many Requests)
+                await new Promise(r => setTimeout(r, 5000));
             }
-            return sig;
-        }).sort((a, b) => b.confidence - a.confidence);
 
-        signalsData = newSignals;
-        renderSignals();
-        
-        const lastScan = document.getElementById('last-scan-time');
-        if (lastScan) {
-            const now = new Date();
-            const hh = String(now.getHours()).padStart(2, '0');
-            const mm = String(now.getMinutes()).padStart(2, '0');
-            lastScan.innerHTML = `<i class="fa-solid fa-rotate text-success fa-spin"></i> آخر مسح: ${hh}:${mm}`;
+            newSignals = newSignals.map(sig => {
+                if (state.favorites && state.favorites.includes(sig.symbol)) {
+                    sig.confidence = Math.min(99.9, sig.confidence + 10);
+                    sig.statusLabel = 'قوية وموثقة (مفضلة) 🌟';
+                }
+                return sig;
+            }).sort((a, b) => b.confidence - a.confidence);
+
+            signalsData = newSignals;
+            renderSignals();
+            
+            const lastScan = document.getElementById('last-scan-time');
+            if (lastScan) {
+                const now = new Date();
+                const hh = String(now.getHours()).padStart(2, '0');
+                const mm = String(now.getMinutes()).padStart(2, '0');
+                lastScan.innerHTML = `<i class="fa-solid fa-rotate text-success fa-spin"></i> آخر مسح: ${hh}:${mm}`;
+            }
+        } finally {
+            isScanning = false;
         }
     }
     
