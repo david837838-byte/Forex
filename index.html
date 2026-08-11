@@ -350,8 +350,7 @@
                                 <button class="filter-btn" data-asset="forex"><i
                                         class="fa-solid fa-money-bill-transfer text-forex"></i> كل أزواج
                                     العملات</button>
-                                <button class="filter-btn" data-asset="crypto"><i
-                                        class="fa-brands fa-bitcoin text-crypto"></i> الكريبتو (BTC, ETH...)</button>
+                                <button class="filter-btn" data-asset="crypto"><i class="fa-brands fa-bitcoin text-crypto"></i> الكريبتو (BTC, ETH...)</button>
                                 <button class="filter-btn" data-asset="stocks"><i
                                         class="fa-solid fa-chart-pie text-info"></i> الأسهم والمؤشرات (US30,
                                     NVDA)</button>
@@ -367,8 +366,14 @@
                                     <option value="scalping">🚀 متداول سكالبينج خاطف (Scalper - 15M)</option>
                                     <option value="swing">📈 متداول استثماري متأرجح (Swing Trader - Daily)</option>
                                     <option value="hedger">🛡️ متداول التحوط ضد التضخم (Macro Hedger)</option>
-                                </select>
-
+                                                                </select>
+                                
+                                <span class="filter-label" style="margin-right:1rem; margin-left:0.5rem;"><i class="fa-solid fa-shield-halved text-gold"></i> وضع القناص:</span>
+                                <label class="switch" style="margin-right: 0.5rem; margin-top:0.2rem;">
+                                    <input type="checkbox" id="strict-mode-toggle" checked>
+                                    <span class="slider round"></span>
+                                </label>
+                                <span id="strict-mode-label" style="color: var(--gold); font-size: 0.8rem; margin-right: 0.5rem; white-space: nowrap;">حذر (الفرص الذهبية)</span>
                                 <span class="filter-label" style="margin-right:1rem;"><i class="fa-solid fa-clock"></i>
                                     الأطر الزمنية:</span>
                                 <select class="custom-select" id="timeframe-select">

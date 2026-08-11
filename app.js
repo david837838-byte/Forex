@@ -523,7 +523,7 @@ Return ONLY valid JSON format:
                 if (!explicitTfStr) return null;
             }
             let dir = gemRes?.direction || localDir;
-            if (dir !== localDir) {
+            if (dir !== localDir && state.aiConfig.strictMode) {
                 console.log(`[STRICT FILTER] ${assetKey} rejected: AI direction (${dir}) conflicts with Technical direction (${localDir})`);
                 if (!explicitTfStr) return null;
                 dir = localDir; // Fallback to technical direction for forced chart analysis
@@ -559,7 +559,8 @@ Return ONLY valid JSON format:
             conf = parseFloat(conf.toFixed(1));
 
             // STRICT FILTER 3: Calibrated Confidence threshold
-            if (conf < 40 && !explicitTfStr) { console.log(`[DEBUG] ${assetKey} rejected: conf < 40 (${conf})`); return null; } // Relaxed from 58 to 50
+            if (state.aiConfig.strictMode && conf < 40 && !explicitTfStr) { console.log(`[DEBUG] ${assetKey} rejected: conf < 40 (${conf})`); return null; }
+            if (!state.aiConfig.strictMode && conf < 15 && !explicitTfStr) { console.log(`[DEBUG] ${assetKey} rejected: conf < 15 (${conf})`); return null; } // Relaxed from 58 to 50
 
             // Phase 2: Market Structure Dynamic TP/SL (Swing High/Low)
             const p = asset.price || ta.currentPrice;
@@ -2166,6 +2167,20 @@ Return ONLY valid JSON format:
     }
 
     // Connect Timeframe selector to regenerate signals dynamically
+    
+    // Strict Mode Toggle
+    const strictModeToggle = document.getElementById('strict-mode-toggle');
+    const strictModeLabel = document.getElementById('strict-mode-label');
+    if (strictModeToggle && strictModeLabel) {
+        state.aiConfig.strictMode = strictModeToggle.checked;
+        strictModeToggle.addEventListener('change', (e) => {
+            state.aiConfig.strictMode = e.target.checked;
+            strictModeLabel.innerText = e.target.checked ? 'حذر (الفرص الذهبية)' : 'مرن (فرص سريعة)';
+            strictModeLabel.style.color = e.target.checked ? 'var(--gold)' : 'var(--danger)';
+            generateAISignals(); // Regenerate immediately
+        });
+    }
+
     const timeframeSelectEl = document.getElementById('timeframe-select');
     if (timeframeSelectEl) {
         timeframeSelectEl.addEventListener('change', () => {
