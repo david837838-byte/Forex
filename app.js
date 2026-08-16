@@ -1714,6 +1714,30 @@ Evaluate objectively. Return ONLY valid JSON:
     }
 
     // ============================================================
+    // NEWS RENDERING ENGINE
+    // ============================================================
+    function renderNews() {
+        const nList = document.getElementById('news-list');
+        if (!nList) return;
+        if (!newsData || newsData.length === 0) {
+            newsData = getDefaultNewsData();
+        }
+        nList.innerHTML = newsData.map(it => `
+        <div class="news-item">
+            <div class="news-top">
+                <span class="news-time"><i class="fa-regular fa-clock"></i> ${it.time}</span>
+                <span class="badge ${it.impactClass || 'badge-live'}">${it.impact || 'عالي التأثير'}</span>
+            </div>
+            <h5 class="news-headline">${it.title}</h5>
+            <div class="news-tags">
+                <span class="tag-mini text-gold" style="background:rgba(255,215,0,0.1); padding:0.2rem 0.5rem; border-radius:4px; font-size:0.75rem;">
+                    <i class="fa-solid fa-brain"></i> AI Sentiment: ${it.sentiment || 'تحليل مباشر 🟢'}
+                </span>
+            </div>
+        </div>`).join('');
+    }
+
+    // ============================================================
     // MARKET SESSION ENGINE — FIX BUG-13
     // ============================================================
     function updateSession() {
@@ -2674,7 +2698,14 @@ Evaluate objectively. Return ONLY valid JSON:
 
     setTimeout(() => { loadChart('OANDA:XAUUSD'); syncChartAI('OANDA:XAUUSD', currentChartTfAi); }, 300);
 
-    calendarImpactBtns.forEach(btn => btn.addEventListener('click', e => { calendarImpactBtns.forEach(b => b.classList.remove('active')); e.currentTarget.classList.add('active'); }));
+    document.querySelectorAll('.calendar-actions button[data-impact]').forEach(btn => {
+        btn.addEventListener('click', e => {
+            document.querySelectorAll('.calendar-actions button[data-impact]').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            const imp = e.currentTarget.getAttribute('data-impact');
+            renderCalendar(imp);
+        });
+    });
     if (document.getElementById('asset-modal-close-btn') && document.getElementById('asset-selector-modal')) {
         document.getElementById('asset-modal-close-btn').addEventListener('click', () => document.getElementById('asset-selector-modal').classList.remove('active'));
     }
