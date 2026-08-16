@@ -278,9 +278,9 @@ def get_ohlcv():
     timeframe = request.args.get('timeframe', '1h')
     
     yf_symbol = symbol
-    if symbol == 'XAUUSD': yf_symbol = 'GC=F'
-    elif symbol == 'XAGUSD': yf_symbol = 'SI=F'
-    elif symbol == 'USOIL': yf_symbol = 'CL=F'
+    if symbol == 'XAUUSD' or symbol == 'XAUUSD_OTC': yf_symbol = 'GC=F'
+    elif symbol == 'XAGUSD' or symbol == 'XAGUSD_OTC': yf_symbol = 'SI=F'
+    elif symbol == 'USOIL' or symbol == 'USOIL_OTC': yf_symbol = 'CL=F'
     elif symbol == 'NGAS': yf_symbol = 'NG=F'
     elif symbol in ['BTCUSDT', 'BTCUSD']: yf_symbol = 'BTC-USD'
     elif symbol in ['ETHUSDT', 'ETHUSD']: yf_symbol = 'ETH-USD'
@@ -292,9 +292,11 @@ def get_ohlcv():
     elif symbol in ['AVAXUSDT', 'AVAXUSD']: yf_symbol = 'AVAX-USD'
     elif symbol in ['LINKUSDT', 'LINKUSD']: yf_symbol = 'LINK-USD'
     elif symbol == 'US30': yf_symbol = '^DJI'
+    elif symbol in ['US100', 'NAS100']: yf_symbol = '^IXIC'
     elif symbol == 'SPX500': yf_symbol = '^GSPC'
-    elif symbol == 'NAS100': yf_symbol = '^IXIC'
-    else: yf_symbol = symbol + '=X'  # Default for all forex pairs like EURGBP, EURJPY, EURUSD etc.
+    elif symbol in ['AAPL', 'TSLA', 'NVDA']: yf_symbol = symbol
+    elif symbol.endswith('_OTC'): yf_symbol = symbol.replace('_OTC', '') + '=X'
+    else: yf_symbol = symbol + '=X'  # Forex pairs like EURGBP, EURJPY, EURUSD etc.
     
     interval_map = {'15m': ('15m', '30d'), '1h': ('1h', '60d'), '4h': ('1h', '60d'), '1d': ('1d', '2y')}
     interval, period = interval_map.get(timeframe, ('1h', '10d'))
