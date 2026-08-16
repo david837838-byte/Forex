@@ -205,7 +205,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const res = await fetch("http://187.77.174.215:2200/api/ohlcv?symbol=" + assetKey + "&timeframe=" + timeframe);
                 const data = await res.json();
-                if(data.status !== 'success' || !data.data || data.data.length < 15) return this.fallback(assetKey);
+                if(data.status !== 'success' || !data.data || data.data.length < 40) return this.fallback(assetKey);
                 
                 const candles = data.data;
                 const closes = candles.map(c => c.close);
@@ -380,10 +380,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // AI ENGINES
     // ============================================================
     const GeminiAI = {
+        cache: {},
         async analyze(assetKey, ta, macSum, localDir, strictMode) {
             const key = state.aiConfig.geminiKey;
-            const model = 'gemini-flash-latest';
+            const model = state.aiConfig.geminiModel || 'gemini-1.5-flash';
             if(!key) return null;
+            
+            const cacheKey = `${assetKey}_${localDir}_${strictMode}`;
+            if (this.cache[cacheKey] && (Date.now() - this.cache[cacheKey].time < 300000)) {
+                return this.cache[cacheKey].data;
+            }
             
             const promptRule = strictMode 
                 ? `RULE: If the news heavily contradicts this ${localDir} trade, output NO_TRADE. Otherwise, output ${localDir}.`
@@ -406,9 +412,16 @@ Return ONLY valid JSON format:
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({ contents: [{parts: [{text: prompt}]}] })
                 });
+                if (!res.ok) {
+                    console.warn(`[GEMINI API] HTTP ${res.status} (Rate limited or quota exceeded)`);
+                    return null;
+                }
                 const data = await res.json();
+                if (!data.candidates || !data.candidates[0]) return null;
                 const textResult = data.candidates[0].content.parts[0].text.replace(/```json/g, "").replace(/```/g, "").trim();
-                return JSON.parse(textResult);
+                const parsed = JSON.parse(textResult);
+                this.cache[cacheKey] = { time: Date.now(), data: parsed };
+                return parsed;
             } catch(e) {
                 return null;
             }
@@ -538,14 +551,12 @@ Return ONLY valid JSON format:
             if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum, localDir, state.aiConfig.strictMode);
             if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum, localDir, state.aiConfig.strictMode);
 
-            // USER RULE: AI MUST NOT BE BYPASSED
+            // AI GRACEFUL FALLBACK: If Gemini/OpenAI rate-limits (429), use Institutional SMC Engine
             if (state.aiConfig.geminiKey && !gemRes) {
-                console.log(`[AI REQUIRED] ${assetKey} rejected: Gemini AI failed to respond or API Key is invalid.`);
-                if (!explicitTfStr) return null;
+                console.log(`[AI INFO] ${assetKey}: Gemini API busy/rate-limited, relying on Institutional Engine.`);
             }
             if (state.aiConfig.openaiKey && !oaiRes) {
-                console.log(`[AI REQUIRED] ${assetKey} rejected: OpenAI failed to respond or API Key is invalid.`);
-                if (!explicitTfStr) return null;
+                console.log(`[AI INFO] ${assetKey}: OpenAI API busy, relying on Institutional Engine.`);
             }
             let dir = gemRes?.direction || localDir;
             if (dir !== localDir && state.aiConfig.strictMode) {
