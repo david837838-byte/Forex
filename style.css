@@ -2273,3 +2273,33 @@ input:checked + .slider:before {
 .slider.round:before {
   border-radius: 50%;
 }
+
+/* ============================================================
+   TRADINGVIEW CHART STYLING & CONTAINER SIZES
+============================================================ */
+.chart-container-card {
+    min-height: 650px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    background: var(--bg-dark-card);
+    border: 1px solid var(--bg-glass-border);
+}
+
+#tradingview_widget_container,
+.tradingview-container {
+    width: 100% !important;
+    min-height: 580px !important;
+    height: 580px !important;
+    position: relative;
+    background: #0f1623;
+}
+
+#modal-tradingview-chart {
+    width: 100% !important;
+    min-height: 480px !important;
+    height: 480px !important;
+    position: relative;
+    background: #0f1623;
+}
