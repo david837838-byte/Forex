@@ -19,6 +19,14 @@ document.addEventListener('DOMContentLoaded', () => {
         adminMarketOverride: 'auto',
         adminAiAccuracy: 97.4,
         favorites: JSON.parse(localStorage.getItem('mp_favorites') || '[]'),
+        // Balanced Smart Signal Engine Config
+        signalMode: localStorage.getItem('mp_signal_mode') || 'auto', // 'auto' | 'manual'
+        signalIntervalSec: 600, // 10 minutes signal cycle
+        scanIntervalSec: 60, // 1 minute market scan cycle
+        minScoreThreshold: parseInt(localStorage.getItem('mp_min_score') || '70'), // 65, 68, 70, 72, 75
+        lastScanTimestamp: new Date(),
+        nextSignalEvalTimestamp: new Date(Date.now() + 600000),
+        activeSignalHistory: {},
         fedData: JSON.parse(localStorage.getItem('mp_fedData') || '{"rate":"5.50%", "exp":"تثبيت (88%)", "cpi":"3.0% (إيجابي للدولار)", "nfp":"+206K (قوي)"}'),
         prices: {
             XAUUSD: { name: 'الذهب (XAUUSD)', price: 0, basePrice: 0, change: '--%', isUp: true, category: 'gold' },
@@ -511,33 +519,107 @@ Return ONLY valid JSON format:
     };
 
     const OpenAI_API = {
-        async analyze(assetKey, ta, macSum, localDir) { return null; },
-        async test(key, model) { return {ok: false, msg: 'Not implemented'}; },
-        async chat(q, sig) { return "OpenAI placeholder"; }
+        cache: {},
+        async analyze(assetKey, ta, macSum, localDir, strictMode) {
+            const key = state.aiConfig.openaiKey;
+            const model = state.aiConfig.openaiModel || 'gpt-4o';
+            if (!key) return null;
+
+            const cacheKey = `${assetKey}_${localDir}_openai`;
+            if (this.cache[cacheKey] && (Date.now() - this.cache[cacheKey].time < 300000)) {
+                return this.cache[cacheKey].data;
+            }
+
+            try {
+                const prompt = `You are an Elite Institutional Algorithmic Hedge Fund Analyst.
+Asset: ${assetKey}
+Direction: ${localDir}
+Technical Data: EMA20=${ta.ema20}, EMA50=${ta.ema50}, EMA200=${ta.ema200}, RSI=${ta.rsi}, MACD Hist=${ta.macd?.hist}, ATR=${ta.atr}, Structure=${ta.structure}.
+Macro & News: ${JSON.stringify(macSum)}.
+
+Evaluate this setup. Return ONLY JSON format:
+{ "direction": "${localDir}", "confidence": 90, "techReasoning": "Confluence aligned across momentum and trend", "macroReasoning": "Macro factors support this move", "impactScore": 2.5 }`;
+
+                const res = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${key}`
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [
+                            { role: 'system', content: 'You are an institutional trading analyst. Return only valid JSON.' },
+                            { role: 'user', content: prompt }
+                        ],
+                        temperature: 0.2
+                    })
+                });
+                if (!res.ok) {
+                    console.warn(`[OPENAI API] HTTP ${res.status}`);
+                    return null;
+                }
+                const data = await res.json();
+                const text = data.choices[0].message.content.replace(/```json/g, '').replace(/```/g, '').trim();
+                const parsed = JSON.parse(text);
+                this.cache[cacheKey] = { time: Date.now(), data: parsed };
+                return parsed;
+            } catch (e) {
+                console.warn('[OPENAI API ERROR]', e);
+                return null;
+            }
+        },
+        async test(key, model) {
+            try {
+                const res = await fetch('https://api.openai.com/v1/models', {
+                    headers: { 'Authorization': `Bearer ${key}` }
+                });
+                return { ok: res.ok, msg: res.ok ? 'متصل بنجاح 🟢' : `فشل الاتصال: HTTP ${res.status}` };
+            } catch (e) {
+                return { ok: false, msg: e.message };
+            }
+        },
+        async chat(q, sig) { return "OpenAI Analyst: " + q; }
     };
 
 
-    // MACRO ANALYSIS ENGINE
+        // MACRO & NEWS RISK ENGINE (4 TIERS)
     // ============================================================
     const Macro = {
-        hasHighImpactNews(assetKey) {
-            // Check if there is a High impact news for USD within the next 2 hours
-            // This is a simplified Risk Management filter to prevent trading during massive volatility
-            if(!calendarData || calendarData.length === 0) return false;
+        evaluateNewsRisk(assetKey) {
+            if (!calendarData || calendarData.length === 0) return { level: 'LOW', penalty: 0, warning: null };
             const now = new Date();
-            for(let ev of calendarData) {
-                if(ev.impact === "High" && (ev.currency === "USD" || assetKey.includes(ev.currency))) {
-                    const evTime = new Date(ev.date);
-                    const diffMs = evTime - now;
-                    const diffHours = diffMs / (1000 * 60 * 60);
-                    // If news is within 2 hours from now
-                    if(diffHours > 0 && diffHours < 2) {
-                        return true;
+            let hasExtreme = false;
+            let hasHigh = false;
+
+            for (let ev of calendarData) {
+                const evCurrency = ev.country || ev.currency || '';
+                const isRelevant = evCurrency === 'USD' || assetKey.includes(evCurrency);
+                if (!isRelevant) continue;
+
+                const evTime = new Date(ev.date + ' ' + (ev.time || '00:00'));
+                const diffMin = (evTime - now) / (1000 * 60);
+
+                // If major high-impact news (NFP/CPI/Interest Rate) within 15 minutes
+                if (ev.impact === 'High') {
+                    if (diffMin >= -5 && diffMin <= 15) {
+                        hasExtreme = true;
+                    } else if (diffMin > 15 && diffMin <= 120) {
+                        hasHigh = true;
                     }
                 }
             }
-            return false;
+
+            if (hasExtreme) return { level: 'EXTREME', penalty: -30, warning: '⛔ خبر عالي التأثير خلال دقائق (يُمنع التداول لحين استقرار السوق)' };
+            if (hasHigh) return { level: 'HIGH', penalty: -8, warning: '⚠️ ترقب خبر عالي التأثير خلال ساعتين (إدارة مخاطر مشددة)' };
+            return { level: 'LOW', penalty: 0, warning: null };
         },
+
+        hasHighImpactNews(assetKey) {
+            const r = this.evaluateNewsRisk(assetKey);
+            return r.level === 'EXTREME';
+        },
+
         evaluate(category) {
             const ctx = state.macroContext || {};
             let score = 50;
@@ -545,213 +627,272 @@ Return ONLY valid JSON format:
 
             if (ctx.overallSentiment === "usd_bullish") {
                 if (category === "gold") {
-                    score = 45;
-                    notes.push("??? ????? ??? ??? ?????");
+                    score = 42;
+                    notes.push("ضغط من قوة الدولار الأمريكي");
                 } else if (category === "forex") {
-                    score = 55;
-                    notes.push("??? ??????? ???? ????? USD");
+                    score = 58;
+                    notes.push("زخم إيجابي لارتفاع الدولار");
                 } else {
                     score = 50;
-                    notes.push("????? ????? ???????");
+                    notes.push("سياق كلي محايد");
+                }
+            } else if (ctx.overallSentiment === "gold_bullish") {
+                if (category === "gold") {
+                    score = 65;
+                    notes.push("سياق كلي داعم لصعود الذهب والمعادن");
+                } else {
+                    score = 50;
+                    notes.push("تحركات طبيعية متوازنة");
                 }
             } else {
-                notes.push("??????? ???? ??????? ??????");
+                notes.push("سياق اقتصادي كلي مستقر");
             }
 
             return { score, notes };
         },
+
         summary() {
             const ctx = state.macroContext || {};
             return {
-                fedBias: ctx.fedBias || "??? ????",
-                geopolitics: ctx.geoRisk || "??? ????",
+                fedBias: ctx.fedBias || "متوازن",
+                geopolitics: ctx.geoRisk || "طبيعي",
                 sentiment: ctx.overallSentiment || "neutral"
             };
         }
     };
 
     // NEURAL SCANNER (COMBINES ALL ENGINES)
-
     // ============================================================
-    const NeuralScanner = {
+        const NeuralScanner = {
         async generate(assetKey, styleCode = 'daytrade', explicitTfStr = null) {
             const asset = state.prices[assetKey];
-            if (!asset) return null;
+            if (!asset || asset.price <= 0) return null;
 
             const tfMap = { scalping: '15m', swing: '4h', hedger: '1d', daytrade: '1h', all: '1h' };
             const tfStr = explicitTfStr || tfMap[styleCode] || '1h';
             
-            // Phase 2: Multi-Timeframe (MTF) Alignment
-            let higherTf = '1d';
-            if (tfStr === '15m') higherTf = '4h';
+            // Multi-Timeframe (MTF) mapping
+            let higherTf = '4h';
+            if (tfStr === '15m') higherTf = '1h';
+            else if (tfStr === '1h') higherTf = '4h';
             else if (tfStr === '4h') higherTf = '1d';
-            else if (tfStr === '1d') higherTf = '1w'; // Optional if 1w exists, else we rely on 1d
+            else if (tfStr === '1d') higherTf = '1d';
             
+            // 1. Technical Analysis on current and higher timeframe
             const ta = await TA.analyzeAsync(assetKey, tfStr);
+            if (!ta) {
+                console.log(`[TECHNICAL] ${assetKey}: TA data unavailable -> NO_TRADE`);
+                return null;
+            }
             const higherTa = await TA.analyzeAsync(assetKey, higherTf);
-            if (!ta) { console.log(`[DEBUG] ${assetKey} rejected: ta is null`); return null; }
-            
-            // RISK MANAGEMENT: Flag high impact news
-            let highImpactWarning = false;
-            if(Macro.hasHighImpactNews(assetKey)) {
-                highImpactWarning = true;
+
+            // 2. Macro & News Risk Check
+            const newsRiskInfo = Macro.evaluateNewsRisk(assetKey);
+            if (newsRiskInfo.level === 'EXTREME' && !explicitTfStr) {
+                console.log(`[NEWS RISK EXTREME] ${assetKey}: High-impact event imminent -> NO_TRADE`);
+                return null;
             }
             const macEv = Macro.evaluate(asset.category);
             const macSum = Macro.summary();
-            
-            // STRICT FILTER 1: Technical & Institutional Alignment
-            let localDir = 'NO_TRADE';
-            let buyScore = (ta.trend === 'Uptrend' ? 1 : 0) + (ta.structure === 'Bullish' ? 1 : 0) + (ta.rsi > 40 && ta.rsi < 70 ? 1 : 0);
-            let sellScore = (ta.trend === 'Downtrend' ? 1 : 0) + (ta.structure === 'Bearish' ? 1 : 0) + (ta.rsi < 60 && ta.rsi > 30 ? 1 : 0);
-            if (buyScore >= 2) localDir = 'BUY';
-            else if (sellScore >= 2) localDir = 'SELL';
-            
-            // STRICT FILTER 2: FVG or OB Presence (must have at least one institutional alignment)
-            const hasInst = (localDir === 'BUY' && (ta.fvg === 'Bullish FVG' || ta.ob === 'Bullish OB' || ta.structure === 'Bullish')) || (localDir === 'SELL' && (ta.fvg === 'Bearish FVG' || ta.ob === 'Bearish OB' || ta.structure === 'Bearish'));
-            
-            // Phase 2 MTF Filter: Deduct confidence if Higher Timeframe Trend disagrees (Relaxed)
-            let mtfPenalty = 0;
-            if (localDir !== 'NO_TRADE' && higherTa) {
-                const higherTrendDir = higherTa.trend === 'Uptrend' ? 'BUY' : 'SELL';
-                if (localDir !== higherTrendDir) {
-                    mtfPenalty = -5; // Just penalize, don't reject completely
-                }
-            }
 
-            // STRICT FILTER 2 (RELAXED): Only warn if alignment fails, do not reject.
-            if (localDir === 'NO_TRADE' || !hasInst) {
-                console.log(`[STRICT FILTER WARNING] ${assetKey} not perfectly aligned: Trend=${ta.trend}, Structure=${ta.structure}`);
-                // Fallback to Trend direction to ensure a signal is generated
-                localDir = ta.trend === 'Uptrend' ? 'BUY' : 'SELL';
-            }
+            // 3. Balanced 100-Point Quantitative Scoring
+            let buyScore = 0;
+            let sellScore = 0;
 
-            let gemRes = null, oaiRes = null;
-            if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum, localDir, state.aiConfig.strictMode);
-            if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum, localDir, state.aiConfig.strictMode);
+            // Factor 1: Trend Alignment (EMA20 vs EMA50 vs EMA200) — 15 pts max
+            if (ta.ema20 > ta.ema50 && ta.ema50 > ta.ema200) buyScore += 15;
+            else if (ta.ema20 < ta.ema50 && ta.ema50 < ta.ema200) sellScore += 15;
+            else if (ta.currentPrice > ta.ema50) buyScore += 8;
+            else sellScore += 8;
 
-            // AI GRACEFUL FALLBACK: If Gemini/OpenAI rate-limits (429), use Institutional SMC Engine
-            if (state.aiConfig.geminiKey && !gemRes) {
-                console.log(`[AI INFO] ${assetKey}: Gemini API busy/rate-limited, relying on Institutional Engine.`);
-            }
-            if (state.aiConfig.openaiKey && !oaiRes) {
-                console.log(`[AI INFO] ${assetKey}: OpenAI API busy, relying on Institutional Engine.`);
-            }
-            let dir = gemRes?.direction || localDir;
-            if (dir !== localDir && state.aiConfig.strictMode) {
-                console.log(`[STRICT FILTER] ${assetKey} rejected: AI direction (${dir}) conflicts with Technical direction (${localDir})`);
-                if (!explicitTfStr) return null;
-                dir = localDir; // Fallback to technical direction for forced chart analysis
-            }
+            // Factor 2: Market Structure (BOS / Swings) — 15 pts max
+            if (ta.structure === 'Bullish' && ta.currentPrice >= ta.ema50) buyScore += 15;
+            else if (ta.structure === 'Bearish' && ta.currentPrice <= ta.ema50) sellScore += 15;
+            else if (ta.structure === 'Bullish') buyScore += 8;
+            else sellScore += 8;
 
-            if (dir === 'NO_TRADE') { console.log(`[DEBUG] ${assetKey} rejected: AI explicitly said NO_TRADE`); return null; }
-            const isBuy = dir === 'BUY';
-            
-            // PHASE 3: Fetch true win rate from backtester endpoint
-            let baseWinRate = 50.0;
-            try {
-                const btRes = await fetch(`http://187.77.174.215:2200/api/backtest?symbol=${assetKey}&timeframe=${tfStr}`);
-                const btData = await btRes.json();
-                if(btData.status === 'success') {
-                    baseWinRate = btData.winRate;
+            // Factor 3: Multi-Timeframe (MTF) Alignment — 15 pts max (+15 aligned, +7 neutral, -10 counter)
+            if (higherTa) {
+                if (higherTa.trend === 'Uptrend') {
+                    buyScore += 15;
+                    sellScore -= 10;
+                } else if (higherTa.trend === 'Downtrend') {
+                    sellScore += 15;
+                    buyScore -= 10;
                 } else {
-                    baseWinRate = ta.score; // Fallback to local score if endpoint fails
+                    buyScore += 7;
+                    sellScore += 7;
                 }
-            } catch(e) { console.error("[BACKTEST ERROR]", e); baseWinRate = ta.score; }
-            
-            let conf = baseWinRate + mtfPenalty;
-            
-            // PHASE 3: Deep AI Macro parsing (adds dynamic JSON impactScore)
-            if (gemRes && typeof gemRes.impactScore === "number") conf += gemRes.impactScore;
-            if (oaiRes && typeof oaiRes.impactScore === "number") conf += oaiRes.impactScore;
-            
-            // If the news impact is brutally negative, we can reject the trade entirely
-            if (gemRes && gemRes.impactScore <= -3.0) {
-                console.log(`[MACRO FILTER] ${assetKey} rejected: AI determined news is heavily against trade (${gemRes.impactScore})`);
-                if(!explicitTfStr) { console.log(`[DEBUG] ${assetKey} rejected at point 1`); return null; }
+            } else {
+                buyScore += 7;
+                sellScore += 7;
             }
-            
-            conf = Math.min(85.0, conf); // Max possible is 85% with all stars aligned
-            conf = parseFloat(conf.toFixed(1));
 
-            // Calibrated Confidence Scoring: Ensure institutional grade (65% - 94%)
-            if (conf < 65) conf = 68.5 + (Math.abs(ta.score || 50) % 15);
-            conf = parseFloat(Math.min(94.5, Math.max(68.0, conf)).toFixed(1));
+            // Factor 4: EMA Ribbon Alignment & Pullback — 10 pts max
+            if (ta.currentPrice > ta.ema20 && ta.ema20 > ta.ema50) buyScore += 10;
+            else if (ta.currentPrice < ta.ema20 && ta.ema20 < ta.ema50) sellScore += 10;
+            else { buyScore += 5; sellScore += 5; }
 
-            // Phase 2: Market Structure Dynamic TP/SL (Swing High/Low)
+            // Factor 5: MACD Momentum — 8 pts max
+            if (ta.macd && ta.macd.hist > 0 && ta.macd.line > ta.macd.signal) buyScore += 8;
+            else if (ta.macd && ta.macd.hist < 0 && ta.macd.line < ta.macd.signal) sellScore += 8;
+            else { buyScore += 3; sellScore += 3; }
+
+            // Factor 6: RSI Momentum Context — 7 pts max
+            if (ta.rsi >= 48 && ta.rsi <= 68) buyScore += 7; // Bullish continuation
+            else if (ta.rsi >= 32 && ta.rsi <= 52) sellScore += 7; // Bearish continuation
+            else if (ta.rsi < 30) buyScore += 6; // Oversold bounce
+            else if (ta.rsi > 70) sellScore += 6; // Overbought pullback
+            else { buyScore += 3; sellScore += 3; }
+
+            // Factor 7: ADX / Trend Strength — 7 pts max
+            if (ta.adx > 24) {
+                if (buyScore > sellScore) buyScore += 7;
+                else sellScore += 7;
+            } else if (ta.adx >= 18) {
+                if (buyScore > sellScore) buyScore += 4;
+                else sellScore += 4;
+            }
+
+            // Factor 8: SMC (FVG / Order Blocks) — 8 pts max
+            if (ta.fvg === 'Bullish FVG' || ta.ob === 'Bullish OB') buyScore += 8;
+            if (ta.fvg === 'Bearish FVG' || ta.ob === 'Bearish OB') sellScore += 8;
+
+            // Factor 9: Volatility & ATR Stability — 5 pts max
+            if (ta.atr > 0) { buyScore += 5; sellScore += 5; }
+
+            // Factor 10: Macro Context & News Sentiment — 10 pts max
+            if (macEv.score >= 55) buyScore += 5;
+            else if (macEv.score <= 45) sellScore += 5;
+            else { buyScore += 3; sellScore += 3; }
+
+            // Apply news penalty if High Risk event
+            buyScore += newsRiskInfo.penalty;
+            sellScore += newsRiskInfo.penalty;
+
+            // Normalize scores (clamp 0 - 100)
+            buyScore = Math.max(0, Math.min(100, Math.round(buyScore)));
+            sellScore = Math.max(0, Math.min(100, Math.round(sellScore)));
+
+            const isBuy = buyScore >= sellScore;
+            const finalScore = isBuy ? buyScore : sellScore;
+            const dir = isBuy ? 'BUY' : 'SELL';
+
+            // 4. Quality Rating & Threshold Check
+            let quality = 'C';
+            if (finalScore >= 90) quality = 'A+';
+            else if (finalScore >= 80) quality = 'A';
+            else if (finalScore >= 72) quality = 'B';
+            else if (finalScore >= 65) quality = 'C';
+            else quality = 'NO_TRADE';
+
+            const minThreshold = state.minScoreThreshold || 70;
+            if (finalScore < minThreshold && !explicitTfStr) {
+                console.log(`[NO TRADE] ${assetKey}: Score (${finalScore}) < Threshold (${minThreshold}) -> Insufficient confluence`);
+                return null;
+            }
+
+            // 5. AI Consultant (Gemini / OpenAI enrich if available, never break system)
+            let gemRes = null, oaiRes = null;
+            if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum, dir, state.aiConfig.strictMode);
+            if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum, dir, state.aiConfig.strictMode);
+
+            // 6. Dynamic Market Structure TP / SL Calculation
             const p = asset.price || ta.currentPrice;
             const atr = ta.atr > 0 ? ta.atr : p * 0.005;
             const dp = asset.category === 'forex' ? 4 : 2;
-            const entry = p; // Market Execution
-            
+            const entry = p;
+
             let sl, tp1, tp2, tp3;
             if (isBuy) {
-                sl = ta.lastSwingLow ? ta.lastSwingLow - (atr * 0.5) : entry - (atr * 1.5); // Relaxed: ATR Fallback restored
-                if (entry - sl < atr) sl = entry - atr; 
+                sl = ta.lastSwingLow ? Math.min(ta.lastSwingLow - (atr * 0.4), entry - (atr * 1.0)) : entry - (atr * 1.5);
+                if (entry - sl < atr * 0.8) sl = entry - (atr * 1.2);
                 const riskDist = entry - sl;
-                tp1 = entry + riskDist; 
-                tp2 = ta.lastSwingHigh && ta.lastSwingHigh > tp1 ? ta.lastSwingHigh : entry + (riskDist * 2);
-                tp3 = entry + (riskDist * 3);
+                tp1 = entry + (riskDist * 1.5);
+                tp2 = entry + (riskDist * 2.2);
+                tp3 = entry + (riskDist * 3.5);
             } else {
-                sl = ta.lastSwingHigh ? ta.lastSwingHigh + (atr * 0.5) : entry + (atr * 1.5); // Relaxed: ATR Fallback restored
-                if (sl - entry < atr) sl = entry + atr;
+                sl = ta.lastSwingHigh ? Math.max(ta.lastSwingHigh + (atr * 0.4), entry + (atr * 1.0)) : entry + (atr * 1.5);
+                if (sl - entry < atr * 0.8) sl = entry + (atr * 1.2);
                 const riskDist = sl - entry;
-                tp1 = entry - riskDist;
-                tp2 = ta.lastSwingLow && ta.lastSwingLow < tp1 ? ta.lastSwingLow : entry - (riskDist * 2);
-                tp3 = entry - (riskDist * 3);
+                tp1 = entry - (riskDist * 1.5);
+                tp2 = entry - (riskDist * 2.2);
+                tp3 = entry - (riskDist * 3.5);
             }
 
             sl = parseFloat(sl.toFixed(dp));
             tp1 = parseFloat(tp1.toFixed(dp));
             tp2 = parseFloat(tp2.toFixed(dp));
             tp3 = parseFloat(tp3.toFixed(dp));
-            
-            const slDistFinal = Math.abs(entry - sl);
-            const tp1DistFinal = Math.abs(entry - tp1);
-            
-            // Phase 2 Risk/Reward Calibrator: Ensure healthy 1:2+ R/R
-            if (tp1DistFinal < slDistFinal * 0.5) {
-                if (isBuy) {
-                    tp1 = parseFloat((entry + (slDistFinal * 1.0)).toFixed(dp));
-                    tp2 = parseFloat((entry + (slDistFinal * 1.8)).toFixed(dp));
-                    tp3 = parseFloat((entry + (slDistFinal * 2.8)).toFixed(dp));
-                } else {
-                    tp1 = parseFloat((entry - (slDistFinal * 1.0)).toFixed(dp));
-                    tp2 = parseFloat((entry - (slDistFinal * 1.8)).toFixed(dp));
-                    tp3 = parseFloat((entry - (slDistFinal * 2.8)).toFixed(dp));
-                }
+
+            const slDist = Math.abs(entry - sl);
+            const tp1Dist = Math.abs(entry - tp1);
+            if (slDist <= 0 || (tp1Dist / slDist) < 1.2) {
+                console.log(`[R/R REJECT] ${assetKey}: Compressed price action unable to guarantee 1:1.5+ RR`);
+                return null;
             }
-            
-            const rrNum = Math.abs(entry - tp3) / slDistFinal;
-            const rr = `1 : ${rrNum.toFixed(1)}`;
 
-            const styleMap = { scalping: '???????? (15M)', swing: '?????? (4H/Daily)', hedger: '???? ?????? (1D)', daytrade: '????? ???? (1H)', all: '????? ???? (1H)' };
-            const styleLabel = styleMap[styleCode] || '????? ???? (1H)';
+            const rr = `1 : ${(Math.abs(entry - tp2) / slDist).toFixed(1)}`;
 
-            const sources = [];
+            // 7. Backtest Win Rate (Truthful, no fake numbers)
+            let backtestDisplay = 'غير متوفر';
+            try {
+                const btRes = await fetch(`http://187.77.174.215:2200/api/backtest?symbol=${assetKey}&timeframe=${tfStr}`);
+                if (btRes.ok) {
+                    const btData = await btRes.json();
+                    if (btData.status === 'success' && typeof btData.winRate === 'number') {
+                        backtestDisplay = `${btData.winRate.toFixed(1)}% (${btData.trades || 0} صفقة)`;
+                    }
+                }
+            } catch (e) { }
+
+            // 8. Reason Strings & Context
+            const reasons = [];
+            reasons.push(`[الاتجاه]: ${ta.trend === 'Uptrend' ? 'صاعد 🟢' : 'هابط 🔴'} وتوافق شريط EMA (20/50/200)`);
+            reasons.push(`[الزخم]: مؤشر RSI (${ta.rsi}) مع تأكيد ماكد MACD (${ta.macd?.hist >= 0 ? 'إيجابي' : 'سلبي'})`);
+            reasons.push(`[المفاهيم المؤسسية SMC]: منطقة ${ta.ob !== 'None' ? ta.ob : (ta.fvg !== 'None' ? ta.fvg : 'سيولة سعرية')} + هيكل ${ta.structure}`);
+            reasons.push(`[إدارة رأس المال]: نسبة العائد للمخاطرة ${rr} (الوقف محمي بدقة ATR)`);
+            if (newsRiskInfo.warning) reasons.push(`[إدارة الأخبار]: ${newsRiskInfo.warning}`);
+            if (gemRes?.techReasoning) reasons.push(`[تحليل Gemini AI]: ${gemRes.techReasoning}`);
+            if (oaiRes?.techReasoning) reasons.push(`[تحليل OpenAI]: ${oaiRes.techReasoning}`);
+
+            const sources = ['خوارزمية كمية (Quantitative Engine)'];
             if (gemRes) sources.push('Gemini AI');
             if (oaiRes) sources.push('OpenAI GPT');
-            sources.push('Institutional AI');
 
-            const reasons = [];
-            reasons.push(`[الاتجاه والموفينجات]: اتجاه ${ta.trend === 'Uptrend' ? 'صاعد 🟢' : 'هابط 🔴'} وتوافق شريط EMA (20/50/200)`);
-            reasons.push(`[الزخم والسيولة]: مؤشر RSI (${ta.rsi}) + ماكد MACD (${ta.macd?.hist >= 0 ? 'زخم شرائي' : 'زخم بيعي'})`);
-            reasons.push(`[المفاهيم المؤسسية SMC]: منطقة ${ta.ob !== 'None' ? ta.ob : (ta.fvg !== 'None' ? ta.fvg : 'سيولة مؤسسية')} + هيكل ${ta.structure}`);
-            reasons.push(`[إدارة رأس المال]: نسبة عائد إلى مخاطرة ${rr} (وقف الخسارة محمي أسفل القاع/القمة بدقة ATR)`);
-            if (gemRes?.techReasoning) reasons.push(`[تحليل Gemini AI الفني]: ${gemRes.techReasoning}`);
-            if (gemRes?.macroReasoning) reasons.push(`[تحليل Gemini AI الإخباري]: ${gemRes.macroReasoning}`);
-            
+            const styleMap = { scalping: 'سكالبينج (15M)', swing: 'سوينغ (4H/يومي)', hedger: 'تحوط كلي (1D)', daytrade: 'تداول يومي (1H)', all: 'تداول يومي (1H)' };
+            const styleLabel = styleMap[styleCode] || 'تداول يومي (1H)';
+
+            console.log(`[SIGNAL GENERATED] ${assetKey} ${dir} | Score: ${finalScore}/100 | Quality: ${quality} | RR: ${rr}`);
+
             return {
-                id: `sig-inst-${Date.now()}`, asset: asset.category, symbol: assetKey,
-                title: `${isBuy ? "????" : "???"} ${asset.name} (Institutional)`,
-                type: dir, timeframe: styleCode, timeframeLabel: styleLabel,
-                entry: parseFloat(entry.toFixed(dp)), tp1, tp2, tp3, sl, rr, conf,
-                confidence: conf, status: 'active',
-                statusLabel: `? ${sources.join(" + ")} ??`,
-                reasons, macro: macEv.notes[0] || 'Institutional Filter Passed',
-                aiSources: sources, techScore: ta.score, macScore: macEv.score
+                id: `sig-${assetKey}-${Date.now()}`,
+                asset: asset.category,
+                symbol: assetKey,
+                title: `${isBuy ? 'شراء' : 'بيع'} ${asset.name}`,
+                type: dir,
+                decision: dir,
+                timeframe: styleCode,
+                timeframeLabel: styleLabel,
+                entry: parseFloat(entry.toFixed(dp)),
+                tp1, tp2, tp3, sl, rr,
+                score: finalScore,
+                confidence: finalScore, // Real quantitative score
+                quality: quality,
+                backtestWinRate: backtestDisplay,
+                riskLevel: newsRiskInfo.level === 'HIGH' ? 'مرتفع ⚠️' : (finalScore >= 80 ? 'منخفض 🛡️' : 'متوسط ⚖️'),
+                status: 'active',
+                statusLabel: `جودة ${quality} • ${sources.join(' + ')}`,
+                reasons,
+                macro: macEv.notes[0] || 'تحليل مؤسسي متوازن',
+                aiSources: sources,
+                techScore: finalScore,
+                atr: atr,
+                time: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })
             };
         }
     };
+
     // ============================================================
     // UTILITIES
     // ============================================================
@@ -1187,21 +1328,53 @@ Return ONLY valid JSON format:
     }
 
     // ============================================================
-    // 10-MINUTE DYNAMIC AI SIGNAL GENERATOR
+        // ============================================================
+    // BALANCED DUAL-CYCLE SCHEDULER & SCANNER
+    // Every 1 Minute: scanMarket()
+    // Every 10 Minutes: evaluateSignals() [in AUTO mode]
     // ============================================================
     let isScanning = false;
-    async function generateAISignals() {
+    let isEvaluating = false;
+
+    async function scanMarket() {
         if (isScanning) return;
         isScanning = true;
-        
         try {
-            const traderStyle = state.activeTraderStyle || 'daytrade';
-            const keysToScan = Object.keys(state.prices);
+            state.lastScanTimestamp = new Date();
+            await fetchPythonYFinancePrices();
+            await fetchLiveNews();
+            await fetchMacroAndNews();
             
-            // Priority assets for instant top recommendations
+            // Update UI banner time
+            updateScannerStatusUI();
+            
+            // Check Emergency High-Confluence Breakout (>88 score) between 10-min cycles
+            checkEmergencyBreakouts();
+        } catch (err) {
+            console.warn('[MARKET SCAN WARNING]', err);
+        } finally {
+            isScanning = false;
+        }
+    }
+
+    async function evaluateSignals(isManual = false) {
+        if (isEvaluating) return;
+        isEvaluating = true;
+
+        const genBtn = document.getElementById('generate-ai-signal-btn');
+        const trigBtn = document.getElementById('trigger-ai-scan-btn');
+        if (genBtn) genBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري التقييم المؤسسي...';
+        if (trigBtn) trigBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري المسح...';
+
+        try {
+            console.log(`[EVALUATION START] Mode: ${state.signalMode.toUpperCase()} | Min Score: ${state.minScoreThreshold}`);
+            const traderStyle = state.activeTraderStyle || 'all';
+            const keysToScan = Object.keys(state.prices);
+
+            // Priority assets for instant top evaluation
             const priorityKeys = ['XAUUSD', 'EURUSD', 'BTCUSD', 'USOIL', 'GBPUSD', 'USDJPY', 'ETHUSD', 'US30', 'NVDA', 'XAGUSD'];
             const sortedKeys = [...new Set([...priorityKeys, ...keysToScan])];
-            
+
             for (let i = 0; i < sortedKeys.length; i++) {
                 const key = sortedKeys[i];
                 const asset = state.prices[key];
@@ -1209,45 +1382,107 @@ Return ONLY valid JSON format:
 
                 try {
                     const sig = await NeuralScanner.generate(key, traderStyle);
-                    if (sig && sig.type !== 'NO_TRADE') {
-                        if (state.favorites && state.favorites.includes(sig.symbol)) {
-                            sig.confidence = Math.min(99.9, sig.confidence + 5);
-                            sig.statusLabel = 'قوية وموثقة (مفضلة) 🌟';
-                        }
-                        // Upsert signal progressively so user sees instant live results
+                    if (sig && sig.score >= (state.minScoreThreshold || 70)) {
+                        // Anti-Spam Duplicate Signal Protection
                         const existingIdx = signalsData.findIndex(s => s.symbol === sig.symbol);
                         if (existingIdx >= 0) {
-                            signalsData[existingIdx] = sig;
+                            const existing = signalsData[existingIdx];
+                            const entryDiff = Math.abs(existing.entry - sig.entry);
+                            const atr = sig.atr || (sig.entry * 0.005);
+                            
+                            // If same direction and entry hasn't moved significantly, update metrics smoothly
+                            if (existing.type === sig.type && entryDiff < atr * 0.6) {
+                                existing.score = sig.score;
+                                existing.confidence = sig.score;
+                                existing.quality = sig.quality;
+                                existing.reasons = sig.reasons;
+                                existing.riskLevel = sig.riskLevel;
+                                renderSignals();
+                                continue;
+                            } else {
+                                signalsData[existingIdx] = sig;
+                            }
                         } else {
                             signalsData.push(sig);
                         }
-                        signalsData.sort((a, b) => b.confidence - a.confidence);
+
+                        signalsData.sort((a, b) => b.score - a.score);
                         renderSignals();
                     }
-                } catch(err) {
-                    console.warn(`Signal error for ${key}:`, err);
+                } catch (err) {
+                    console.warn(`Evaluation error for ${key}:`, err);
                 }
 
-                // If AI key is set, add brief delay between requests; otherwise run at full speed
+                // If AI key is set, add brief delay between requests to protect rate limits
                 if (state.aiConfig.geminiKey || state.aiConfig.openaiKey) {
-                    await new Promise(r => setTimeout(r, 2000));
+                    await new Promise(r => setTimeout(r, 1500));
                 } else {
-                    await new Promise(r => setTimeout(r, 50));
+                    await new Promise(r => setTimeout(r, 30));
                 }
             }
-            
-            const lastScan = document.getElementById('last-scan-time');
-            if (lastScan) {
-                const now = new Date();
-                const hh = String(now.getHours()).padStart(2, '0');
-                const mm = String(now.getMinutes()).padStart(2, '0');
-                lastScan.innerHTML = `<i class="fa-solid fa-rotate text-success fa-spin"></i> آخر مسح مباشر: ${hh}:${mm} (نشط 🟢)`;
+
+            // In AUTO mode, set next 10-min evaluation timestamp
+            if (state.signalMode === 'auto') {
+                state.nextSignalEvalTimestamp = new Date(Date.now() + (state.signalIntervalSec * 1000));
             }
+            updateScannerStatusUI();
         } finally {
-            isScanning = false;
+            isEvaluating = false;
+            if (genBtn) genBtn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> توليد توصية AI فورية';
+            if (trigBtn) trigBtn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> مسح فوري بالذكاء الاصطناعي (AI Scan)';
         }
     }
-    
+
+    async function checkEmergencyBreakouts() {
+        // Fast lightweight check on Gold, EURUSD, BTC, USOIL for exceptional setups (>88 score)
+        const checkKeys = ['XAUUSD', 'EURUSD', 'BTCUSD', 'USOIL'];
+        for (let k of checkKeys) {
+            try {
+                const ta = TA.analyze(k);
+                if (ta && ta.score >= 88) {
+                    const existing = signalsData.find(s => s.symbol === k);
+                    if (!existing) {
+                        console.log(`[EMERGENCY TRIGGER] High-confluence breakout detected on ${k} (Score: ${ta.score})!`);
+                        const sig = await NeuralScanner.generate(k, state.activeTraderStyle || 'all');
+                        if (sig && sig.score >= 80) {
+                            signalsData.unshift(sig);
+                            renderSignals();
+                        }
+                    }
+                }
+            } catch (e) { }
+        }
+    }
+
+    function updateScannerStatusUI() {
+        const lastScanEl = document.getElementById('last-scan-time');
+        const nextScanEl = document.getElementById('next-eval-time');
+        const modeBadge = document.getElementById('scanner-mode-badge');
+        
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        
+        if (lastScanEl) {
+            lastScanEl.innerHTML = `<i class="fa-solid fa-satellite-dish text-success fa-beat-fade"></i> الرادار: <strong class="text-success">نشط 🟢</strong> (كل 1 د) | آخر فحص: ${timeStr}`;
+        }
+        
+        if (nextScanEl && state.nextSignalEvalTimestamp) {
+            const diffSec = Math.max(0, Math.round((state.nextSignalEvalTimestamp - now) / 1000));
+            const mins = Math.floor(diffSec / 60);
+            const secs = diffSec % 60;
+            if (state.signalMode === 'auto') {
+                nextScanEl.innerHTML = `<i class="fa-solid fa-clock-rotate-left text-gold"></i> التقييم التلقائي القادم: ${mins}:${String(secs).padStart(2, '0')}`;
+            } else {
+                nextScanEl.innerHTML = `<i class="fa-solid fa-hand text-warning"></i> الوضع: <strong class="text-warning">يدوي (Manual)</strong>`;
+            }
+        }
+        
+        if (modeBadge) {
+            modeBadge.className = `badge ${state.signalMode === 'auto' ? 'badge-gold' : 'badge-warning'}`;
+            modeBadge.textContent = state.signalMode === 'auto' ? 'تلقائي (AUTO 10M)' : 'يدوي (MANUAL)';
+        }
+    }
+
     // ============================================================
     // REAL FOREX & METALS LIVE API FETCH (NOW ACTIVE VIA CORS PROXY)
     // ============================================================
@@ -1274,6 +1509,9 @@ Return ONLY valid JSON format:
     // ============================================================
     // RENDER SIGNALS
     // ============================================================
+        // ============================================================
+    // RENDER SIGNALS (BALANCED QUALITY & REAL METRICS)
+    // ============================================================
     function renderSignals() {
         const container = document.getElementById('signals-grid');
         if (!container) return;
@@ -1289,11 +1527,15 @@ Return ONLY valid JSON format:
             }
         }
 
+        const countBadge = document.getElementById('active-signals-count');
+        if (countBadge) countBadge.textContent = `${filtered.length} صفقة نشطة`;
+
         if (filtered.length === 0) {
-            container.innerHTML = `<div class="no-signals" style="text-align: center; padding: 3rem; color: var(--text-secondary); border: 1px dashed var(--border-color); border-radius: 12px; margin-top: 1rem;">
-                <i class="fa-solid fa-triangle-exclamation" style="font-size: 3rem; color: var(--gold); margin-bottom: 1rem; display: block;"></i>
-                <h3 style="color: var(--text-primary); margin-bottom: 0.5rem;">لا توجد فرصة تداول تستوفي جميع معايير الجودة حالياً.</h3>
-                <p>الذكاء الاصطناعي يقوم بفلترة الأسواق بصرامة، يُرجى الانتظار لحين توفر فرصة قوية.</p>
+            container.innerHTML = `<div class="no-signals" style="text-align: center; padding: 3.5rem 1.5rem; color: var(--text-secondary); border: 1px dashed var(--border-color); border-radius: 14px; margin-top: 1rem; background: rgba(15, 22, 35, 0.4);">
+                <i class="fa-solid fa-radar fa-beat-fade" style="font-size: 3.5rem; color: var(--gold); margin-bottom: 1.2rem; display: block;"></i>
+                <h3 style="color: var(--text-primary); margin-bottom: 0.6rem; font-size: 1.25rem;">لا توجد صفقات تستوفي شروط التوافق (الحد الأدنى ${state.minScoreThreshold || 70} نقطة) حالياً</h3>
+                <p style="max-width: 550px; margin: 0 auto 1.5rem auto; font-size: 0.9rem; line-height: 1.6;">الرادار يفحص الأسواق لحظياً كل دقيقة. سيتم نشر الفرص ذات الجودة العالية تلقائياً في دورة التقييم القادمة أو يمكنك التوليد الفوري الآن.</p>
+                <button class="btn btn-gold btn-sm" onclick="document.getElementById('generate-ai-signal-btn')?.click()"><i class="fa-solid fa-bolt"></i> فحص وتقييم فوري الآن</button>
             </div>`;
             return;
         }
@@ -1301,11 +1543,15 @@ Return ONLY valid JSON format:
         filtered.forEach(sig => {
             const isBuy = sig.type.toLowerCase() === 'buy';
             const typeClass = isBuy ? 'type-buy' : 'type-sell';
-            const typeLabel = isBuy ? 'شراء (Buy)' : 'بيع (Sell)';
+            const typeLabel = isBuy ? 'شراء (BUY)' : 'بيع (SELL)';
             const typeIcon = isBuy ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down';
             
-            const pData = state.prices[sig.symbol];
-            const logo = pData ? pData.logo : 'https://cryptologos.cc/logos/bitcoin-btc-logo.svg';
+            // Quality Badge Styling
+            let qBadgeClass = 'badge-gold';
+            if (sig.quality === 'A+') qBadgeClass = 'badge-live';
+            else if (sig.quality === 'A') qBadgeClass = 'badge-gold';
+            else if (sig.quality === 'B') qBadgeClass = 'badge-warning';
+            else qBadgeClass = 'badge-outline';
 
             const card = document.createElement('div');
             card.className = 'signal-card';
@@ -1313,6 +1559,7 @@ Return ONLY valid JSON format:
                 <div class="signal-header">
                     <div class="signal-asset">
                         <span class="asset-name"><i class="fa-solid fa-bolt text-gold"></i> ${sig.symbol}</span>
+                        <span class="badge ${qBadgeClass}" style="margin-right: 0.5rem; font-size: 0.75rem;">جودة ${sig.quality || 'A'}</span>
                     </div>
                     <span class="signal-time">${sig.time || 'الآن'} <i class="fa-regular fa-clock"></i></span>
                 </div>
@@ -1346,8 +1593,11 @@ Return ONLY valid JSON format:
                     </div>
                 </div>
                 
-                <div class="signal-footer">
-                    <span class="badge badge-warning"><i class="fa-solid fa-brain"></i> دقة: ${sig.confidence}%</span>
+                <div class="signal-footer" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                    <div style="display:flex; gap:0.4rem; align-items:center;">
+                        <span class="badge badge-gold" title="النقاط الفنية المتكاملة"><i class="fa-solid fa-chart-simple"></i> نقاط: ${sig.score || sig.confidence}/100</span>
+                        <span class="badge badge-outline" style="font-size:0.75rem;" title="نسبة العائد إلى المخاطرة">R/R: ${sig.rr}</span>
+                    </div>
                     <button class="btn btn-primary btn-sm analyze-btn" data-id="${sig.id}"><i class="fa-solid fa-chart-line"></i> تحليل وتفاصيل الصفقة</button>
                 </div>
             `;
@@ -1361,41 +1611,6 @@ Return ONLY valid JSON format:
                 openModal(id);
             });
         });
-    }
-    
-    // ============================================================
-    // NEWS
-    // ============================================================
-    function renderNews() {
-        if (!newsList) return;
-        newsList.innerHTML = newsData.map(it => `
-        <div class="news-item">
-            <div class="news-top"><span class="news-time"><i class="fa-regular fa-clock"></i> ${it.time}</span><span class="badge ${it.impactClass}">${it.impact}</span></div>
-            <h5 class="news-headline">${it.title}</h5>
-            <div class="news-tags"><span class="tag-mini text-gold" style="background:rgba(255,215,0,0.1);"><i class="fa-solid fa-brain"></i> AI Sentiment: ${it.sentiment}</span></div>
-        </div>`).join('');
-    }
-
-    async function fetchRealNews() {
-        const fk = state.aiConfig.finnhubKey;
-        if (!fk) return;
-        try {
-            const r = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${fk}`);
-            if (!r.ok) return;
-            const items = await r.json();
-            if (Array.isArray(items) && items.length > 0) {
-                const fetched = items.slice(0, 3).map(item => ({
-                    time: 'مباشر 🔴',
-                    title: item.headline,
-                    sentiment: 'تحليل مباشر 🟢',
-                    sentimentType: 'gold-up',
-                    impact: 'عالي التأثير',
-                    impactClass: 'badge-live'
-                }));
-                newsData.unshift(...fetched);
-                renderNews();
-            }
-        } catch (e) { }
     }
 
     // ============================================================
@@ -2278,21 +2493,43 @@ Return ONLY valid JSON format:
     }
 
     // ============================================================
-    // INIT — IMMEDIATE LIVE WEBSOCKET & FRESH DATA FETCH ENGINE
-    // Priority: 1) TradingView CORS Proxy  2) Binance WS  3) Metals.Live  4) Python Backend
+        // ============================================================
+    // INIT — BALANCED SMART ENGINE CYCLES
     // ============================================================
-    RealTimeWebSocketManager.startAll(); // Start 24/7 background WebSocket stream (Binance Crypto Live 24/7)
-    fetchPythonYFinancePrices().then(() => { setTimeout(generateAISignals, 2000); });
-    fetchCrypto(); // Binance 24/7 Live Crypto API Fetch
+    RealTimeWebSocketManager.startAll(); // 24/7 background WebSocket stream
+    fetchPythonYFinancePrices().then(() => {
+        // Initial immediate evaluation on page startup
+        setTimeout(() => { evaluateSignals(false); }, 1500);
+    });
+    fetchCrypto();
 
+    // 1-Second Price & UI Tickers
     setInterval(updateSession, 1000);
-    setInterval(fetchPythonYFinancePrices, 1000); // 1-second TradingView CORS Proxy refresh (real-time)
-    setInterval(fetchCrypto, 1000); // 1-second Binance Live Crypto Refresh
-    setInterval(autoRefreshSignalsEveryMinute, 60000); // 10-minute automatic AI signal refresh
-    startStream();
+    setInterval(fetchPythonYFinancePrices, 1000);
+    setInterval(fetchCrypto, 1000);
 
-    updateSession(); updateTicker(); renderSignals(); renderNews(); renderCalendar(); fetchCalendarData();
-    initCalc(); // FIX BUG-10
+    // 1-Minute Core Market Scanner (Updates all assets, indicators, and MTF)
+    setInterval(scanMarket, 60000);
+
+    // 10-Minute Auto Signal Evaluator (When in AUTO mode)
+    setInterval(() => {
+        if (state.signalMode === 'auto') {
+            evaluateSignals(false);
+        }
+        updateScannerStatusUI();
+    }, 600000);
+
+    // 1-Second countdown clock updater for the UI timer
+    setInterval(updateScannerStatusUI, 1000);
+
+    startStream();
+    updateSession();
+    updateTicker();
+    renderSignals();
+    renderNews();
+    renderCalendar();
+    fetchCalendarData();
+    initCalc();
 
     setTimeout(() => { loadChart('OANDA:XAUUSD'); syncChartAI('OANDA:XAUUSD', currentChartTfAi); }, 300);
 
@@ -2301,26 +2538,49 @@ Return ONLY valid JSON format:
         document.getElementById('asset-modal-close-btn').addEventListener('click', () => document.getElementById('asset-selector-modal').classList.remove('active'));
     }
 
-    // Connect Timeframe selector to regenerate signals dynamically
-    
-    // Strict Mode Toggle
-    const strictModeToggle = document.getElementById('strict-mode-toggle');
-    const strictModeLabel = document.getElementById('strict-mode-label');
-    if (strictModeToggle && strictModeLabel) {
-        state.aiConfig.strictMode = strictModeToggle.checked;
-        strictModeToggle.addEventListener('change', (e) => {
-            state.aiConfig.strictMode = e.target.checked;
-            strictModeLabel.innerText = e.target.checked ? 'حذر (الفرص الذهبية)' : 'مرن (فرص سريعة)';
-            strictModeLabel.style.color = e.target.checked ? 'var(--gold)' : 'var(--danger)';
-            generateAISignals(); // Regenerate immediately
+    // Connect Manual / Auto Mode Switcher
+    const modeSelectEl = document.getElementById('signal-mode-select');
+    if (modeSelectEl) {
+        modeSelectEl.value = state.signalMode;
+        modeSelectEl.addEventListener('change', (e) => {
+            state.signalMode = e.target.value;
+            localStorage.setItem('mp_signal_mode', e.target.value);
+            if (state.signalMode === 'auto') {
+                state.nextSignalEvalTimestamp = new Date(Date.now() + 600000);
+            }
+            updateScannerStatusUI();
+        });
+    }
+
+    // Connect Minimum Score Threshold Selector
+    const minScoreSelectEl = document.getElementById('min-score-select');
+    if (minScoreSelectEl) {
+        minScoreSelectEl.value = state.minScoreThreshold.toString();
+        minScoreSelectEl.addEventListener('change', (e) => {
+            state.minScoreThreshold = parseInt(e.target.value);
+            localStorage.setItem('mp_min_score', e.target.value);
+            renderSignals();
+        });
+    }
+
+    // Connect Manual Generate Now Buttons
+    const genAiBtn = document.getElementById('generate-ai-signal-btn');
+    if (genAiBtn) {
+        genAiBtn.addEventListener('click', () => {
+            evaluateSignals(true);
+        });
+    }
+    const trigAiBtn = document.getElementById('trigger-ai-scan-btn');
+    if (trigAiBtn) {
+        trigAiBtn.addEventListener('click', () => {
+            evaluateSignals(true);
         });
     }
 
     const timeframeSelectEl = document.getElementById('timeframe-select');
     if (timeframeSelectEl) {
         timeframeSelectEl.addEventListener('change', () => {
-            // Instantly regenerate signals with the new timeframe TP/SL math
-            generateAISignals();
+            evaluateSignals(true);
         });
     }
 
