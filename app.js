@@ -527,15 +527,15 @@ Return ONLY valid JSON:
   "conflicts": []
 }`;
             try {
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+                let targetModel = model;
+                if (!targetModel || targetModel === 'gemini-1.5-flash') targetModel = 'gemini-1.5-flash-latest';
+                
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${key}`, {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({ contents: [{parts: [{text: prompt}]}] })
                 });
-                if (!res.ok) {
-                    console.warn(`[GEMINI API] HTTP ${res.status} (Rate limited or busy)`);
-                    return null;
-                }
+                if (!res.ok) return null;
                 const data = await res.json();
                 if (!data.candidates || !data.candidates[0]) return null;
                 const textResult = data.candidates[0].content.parts[0].text.replace(/```json/g, "").replace(/```/g, "").trim();
