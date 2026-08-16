@@ -460,38 +460,39 @@ document.addEventListener('DOMContentLoaded', () => {
     // ============================================================
     // AI ENGINES
     // ============================================================
-    const GeminiAI = {
+        const GeminiAI = {
         cache: {},
-        async analyze(assetKey, ta, macSum, localDir, strictMode) {
+        async analyze(assetKey, ta, macSum) {
             const key = state.aiConfig.geminiKey;
             const model = state.aiConfig.geminiModel || 'gemini-1.5-flash';
-            if(!key) return null;
+            if (!key) return null;
             
-            const cacheKey = `${assetKey}_${localDir}_${strictMode}`;
+            const cacheKey = `${assetKey}_independent_ai`;
             if (this.cache[cacheKey] && (Date.now() - this.cache[cacheKey].time < 300000)) {
                 return this.cache[cacheKey].data;
             }
             
-            const promptRule = strictMode 
-                ? `RULE: If the news heavily contradicts this ${localDir} trade, output NO_TRADE. Otherwise, output ${localDir}.`
-                : `RULE: This is an aggressive high-frequency scalping mode. Ignore minor news contradictions. ONLY output NO_TRADE if there is a massive market-breaking crash. Otherwise, MUST output ${localDir}.`;
-
-                        const prompt = `You are an Elite Institutional Algorithmic Hedge Fund Analyst.
+            const prompt = `You are an Independent Senior Quantitative Trading Analyst.
 Asset: ${assetKey}
-Technical Trend: ${localDir}
-Multi-Indicator Confluence:
-- Moving Averages: EMA20=${ta.ema20}, EMA50=${ta.ema50}, EMA200=${ta.ema200} (Trend: ${ta.trend})
-- Oscillators: RSI(14)=${ta.rsi}, MACD Histogram=${ta.macd?.hist || 0}
-- Volatility: ATR=${ta.atr}, Bollinger Bands Upper/Lower=[${ta.bb?.upper || 0}, ${ta.bb?.lower || 0}], ADX=${ta.adx}
+Price: ${ta.currentPrice}
+Technical Indicators:
+- Triple EMA Ribbon (20/50/200): EMA20=${ta.ema20}, EMA50=${ta.ema50}, EMA200=${ta.ema200} (Trend: ${ta.trend})
+- Oscillators: RSI(14)=${ta.rsi}, MACD Line=${ta.macd?.line || 0}, Signal=${ta.macd?.signal || 0}, Hist=${ta.macd?.hist || 0}
+- Volatility & Range: ATR=${ta.atr}, Bollinger Bands=[Upper: ${ta.bb?.upper || 0}, Mid: ${ta.bb?.middle || 0}, Lower: ${ta.bb?.lower || 0}], ADX=${ta.adx}
 - Smart Money Concepts (SMC): Structure=${ta.structure}, FVG=${ta.fvg}, OrderBlock=${ta.ob}
-- Quantitative Confluence Score: ${ta.score}/100
-- Recent Global Macro & News: ${JSON.stringify(macSum)}.
+- Recent Macro Context & News: ${JSON.stringify(macSum)}.
 
-Task: Evaluate this ${localDir} trade setup.
-${promptRule}
+Analyze this asset objectively without bias.
+Determine whether there is a high-probability BUY, SELL, or NO_TRADE setup.
 
-Return ONLY valid JSON format:
-{ "direction": "${localDir}", "confidence": 92, "techReasoning": "Multi-indicator confluence confirms strong trend alignment across EMA ribbon, MACD, and SMC Order Blocks", "macroReasoning": "Macro sentiment aligns with technical direction with minimal drawdown risk" }`;
+Return ONLY valid JSON:
+{
+  "direction": "BUY",
+  "score": 85,
+  "risk": "LOW",
+  "reasoning": "Strong bullish momentum confirmed across EMA ribbon and MACD",
+  "conflicts": []
+}`;
             try {
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
                     method: "POST",
@@ -499,7 +500,7 @@ Return ONLY valid JSON format:
                     body: JSON.stringify({ contents: [{parts: [{text: prompt}]}] })
                 });
                 if (!res.ok) {
-                    console.warn(`[GEMINI API] HTTP ${res.status} (Rate limited or quota exceeded)`);
+                    console.warn(`[GEMINI API] HTTP ${res.status} (Rate limited or busy)`);
                     return null;
                 }
                 const data = await res.json();
@@ -518,27 +519,33 @@ Return ONLY valid JSON format:
         async chat(q, sig) { return "Institutional analysis requires strict alignment. " + q; }
     };
 
-    const OpenAI_API = {
+        const OpenAI_API = {
         cache: {},
-        async analyze(assetKey, ta, macSum, localDir, strictMode) {
+        async analyze(assetKey, ta, macSum) {
             const key = state.aiConfig.openaiKey;
             const model = state.aiConfig.openaiModel || 'gpt-4o';
             if (!key) return null;
 
-            const cacheKey = `${assetKey}_${localDir}_openai`;
+            const cacheKey = `${assetKey}_openai_independent`;
             if (this.cache[cacheKey] && (Date.now() - this.cache[cacheKey].time < 300000)) {
                 return this.cache[cacheKey].data;
             }
 
             try {
-                const prompt = `You are an Elite Institutional Algorithmic Hedge Fund Analyst.
+                const prompt = `You are an Independent Senior Quantitative Trading Analyst.
 Asset: ${assetKey}
-Direction: ${localDir}
+Price: ${ta.currentPrice}
 Technical Data: EMA20=${ta.ema20}, EMA50=${ta.ema50}, EMA200=${ta.ema200}, RSI=${ta.rsi}, MACD Hist=${ta.macd?.hist}, ATR=${ta.atr}, Structure=${ta.structure}.
 Macro & News: ${JSON.stringify(macSum)}.
 
-Evaluate this setup. Return ONLY JSON format:
-{ "direction": "${localDir}", "confidence": 90, "techReasoning": "Confluence aligned across momentum and trend", "macroReasoning": "Macro factors support this move", "impactScore": 2.5 }`;
+Evaluate objectively. Return ONLY valid JSON:
+{
+  "direction": "BUY",
+  "score": 82,
+  "risk": "LOW",
+  "reasoning": "Bullish structure with expanding momentum",
+  "conflicts": []
+}`;
 
                 const res = await fetch('https://api.openai.com/v1/chat/completions', {
                     method: 'POST',
@@ -663,7 +670,7 @@ Evaluate this setup. Return ONLY JSON format:
 
     // NEURAL SCANNER (COMBINES ALL ENGINES)
     // ============================================================
-        const NeuralScanner = {
+            const NeuralScanner = {
         async generate(assetKey, styleCode = 'daytrade', explicitTfStr = null) {
             const asset = state.prices[assetKey];
             if (!asset || asset.price <= 0) return null;
@@ -681,37 +688,48 @@ Evaluate this setup. Return ONLY JSON format:
             // 1. Technical Analysis on current and higher timeframe
             const ta = await TA.analyzeAsync(assetKey, tfStr);
             if (!ta) {
-                console.log(`[TECHNICAL] ${assetKey}: TA data unavailable -> NO_TRADE`);
+                console.log(`[TECHNICAL: NO_TRADE] ${assetKey}: Missing technical data`);
                 return null;
             }
             const higherTa = await TA.analyzeAsync(assetKey, higherTf);
 
-            // 2. Macro & News Risk Check
+            // 2. Macro & News Risk Evaluation
             const newsRiskInfo = Macro.evaluateNewsRisk(assetKey);
             if (newsRiskInfo.level === 'EXTREME' && !explicitTfStr) {
-                console.log(`[NEWS RISK EXTREME] ${assetKey}: High-impact event imminent -> NO_TRADE`);
+                console.log(`[NEWS RISK EXTREME: NO_TRADE] ${assetKey}: High-impact event imminent`);
                 return null;
             }
             const macEv = Macro.evaluate(asset.category);
             const macSum = Macro.summary();
 
-            // 3. Balanced 100-Point Quantitative Scoring
+            // 3. Separated Scoring: Buy Score vs Sell Score vs Market Quality Score
             let buyScore = 0;
             let sellScore = 0;
+            let marketQualityScore = 50; // Base market health
 
-            // Factor 1: Trend Alignment (EMA20 vs EMA50 vs EMA200) — 15 pts max
-            if (ta.ema20 > ta.ema50 && ta.ema50 > ta.ema200) buyScore += 15;
-            else if (ta.ema20 < ta.ema50 && ta.ema50 < ta.ema200) sellScore += 15;
-            else if (ta.currentPrice > ta.ema50) buyScore += 8;
-            else sellScore += 8;
+            // Factor 1: Trend Alignment (EMA 20 / 50 / 200) — 15 pts max
+            if (ta.ema20 > ta.ema50 && ta.ema50 > ta.ema200) {
+                buyScore += 15;
+            } else if (ta.ema20 < ta.ema50 && ta.ema50 < ta.ema200) {
+                sellScore += 15;
+            } else if (ta.currentPrice > ta.ema50) {
+                buyScore += 8;
+            } else if (ta.currentPrice < ta.ema50) {
+                sellScore += 8;
+            }
 
-            // Factor 2: Market Structure (BOS / Swings) — 15 pts max
-            if (ta.structure === 'Bullish' && ta.currentPrice >= ta.ema50) buyScore += 15;
-            else if (ta.structure === 'Bearish' && ta.currentPrice <= ta.ema50) sellScore += 15;
-            else if (ta.structure === 'Bullish') buyScore += 8;
-            else sellScore += 8;
+            // Factor 2: Market Structure & BOS — 15 pts max
+            if (ta.structure === 'Bullish' && ta.currentPrice >= ta.ema50) {
+                buyScore += 15;
+            } else if (ta.structure === 'Bearish' && ta.currentPrice <= ta.ema50) {
+                sellScore += 15;
+            } else if (ta.structure === 'Bullish') {
+                buyScore += 8;
+            } else if (ta.structure === 'Bearish') {
+                sellScore += 8;
+            }
 
-            // Factor 3: Multi-Timeframe (MTF) Alignment — 15 pts max (+15 aligned, +7 neutral, -10 counter)
+            // Factor 3: Higher Timeframe (MTF) Alignment — 15 pts max (+15 aligned, +7 neutral, -10 counter)
             if (higherTa) {
                 if (higherTa.trend === 'Uptrend') {
                     buyScore += 15;
@@ -728,74 +746,116 @@ Evaluate this setup. Return ONLY JSON format:
                 sellScore += 7;
             }
 
-            // Factor 4: EMA Ribbon Alignment & Pullback — 10 pts max
-            if (ta.currentPrice > ta.ema20 && ta.ema20 > ta.ema50) buyScore += 10;
-            else if (ta.currentPrice < ta.ema20 && ta.ema20 < ta.ema50) sellScore += 10;
-            else { buyScore += 5; sellScore += 5; }
+            // Factor 4: EMA Ribbon Proximity & Momentum — 10 pts max
+            if (ta.currentPrice > ta.ema20 && ta.ema20 > ta.ema50) {
+                buyScore += 10;
+            } else if (ta.currentPrice < ta.ema20 && ta.ema20 < ta.ema50) {
+                sellScore += 10;
+            }
 
-            // Factor 5: MACD Momentum — 8 pts max
-            if (ta.macd && ta.macd.hist > 0 && ta.macd.line > ta.macd.signal) buyScore += 8;
-            else if (ta.macd && ta.macd.hist < 0 && ta.macd.line < ta.macd.signal) sellScore += 8;
-            else { buyScore += 3; sellScore += 3; }
+            // Factor 5: MACD Histogram & Line Momentum — 8 pts max
+            if (ta.macd) {
+                if (ta.macd.hist > 0 && ta.macd.line > ta.macd.signal) buyScore += 8;
+                else if (ta.macd.hist < 0 && ta.macd.line < ta.macd.signal) sellScore += 8;
+            }
 
-            // Factor 6: RSI Momentum Context — 7 pts max
-            if (ta.rsi >= 48 && ta.rsi <= 68) buyScore += 7; // Bullish continuation
-            else if (ta.rsi >= 32 && ta.rsi <= 52) sellScore += 7; // Bearish continuation
-            else if (ta.rsi < 30) buyScore += 6; // Oversold bounce
-            else if (ta.rsi > 70) sellScore += 6; // Overbought pullback
-            else { buyScore += 3; sellScore += 3; }
+            // Factor 6: RSI Momentum Context — 7 pts max (Interpreted relative to trend)
+            if (ta.rsi >= 48 && ta.rsi <= 68) {
+                buyScore += 7; // Healthy bullish trend momentum
+            } else if (ta.rsi >= 32 && ta.rsi <= 52) {
+                sellScore += 7; // Healthy bearish trend momentum
+            } else if (ta.rsi < 30) {
+                buyScore += 5; // Oversold mean reversion setup
+            } else if (ta.rsi > 70) {
+                sellScore += 5; // Overbought mean reversion setup
+            }
 
-            // Factor 7: ADX / Trend Strength — 7 pts max
+            // Factor 7: ADX / Trend Strength — 7 pts max (Boosts dominant direction & Quality)
             if (ta.adx > 24) {
+                marketQualityScore += 15;
                 if (buyScore > sellScore) buyScore += 7;
-                else sellScore += 7;
+                else if (sellScore > buyScore) sellScore += 7;
             } else if (ta.adx >= 18) {
+                marketQualityScore += 8;
                 if (buyScore > sellScore) buyScore += 4;
-                else sellScore += 4;
+                else if (sellScore > buyScore) sellScore += 4;
+            } else {
+                marketQualityScore -= 10; // Ranging / choppy penalty
             }
 
             // Factor 8: SMC (FVG / Order Blocks) — 8 pts max
             if (ta.fvg === 'Bullish FVG' || ta.ob === 'Bullish OB') buyScore += 8;
             if (ta.fvg === 'Bearish FVG' || ta.ob === 'Bearish OB') sellScore += 8;
 
-            // Factor 9: Volatility & ATR Stability — 5 pts max
-            if (ta.atr > 0) { buyScore += 5; sellScore += 5; }
+            // Factor 9: Volatility & ATR (Affects Market Quality only, NOT directional bias)
+            if (ta.atr > 0 && (ta.atr / ta.currentPrice) >= 0.001) {
+                marketQualityScore += 15;
+            } else {
+                marketQualityScore -= 10; // Extremely low volatility/spread risk
+            }
 
-            // Factor 10: Macro Context & News Sentiment — 10 pts max
+            // Factor 10: Macro Context & News Risk — 10 pts max
             if (macEv.score >= 55) buyScore += 5;
             else if (macEv.score <= 45) sellScore += 5;
-            else { buyScore += 3; sellScore += 3; }
 
-            // Apply news penalty if High Risk event
+            // Apply news risk penalty
             buyScore += newsRiskInfo.penalty;
             sellScore += newsRiskInfo.penalty;
 
-            // Normalize scores (clamp 0 - 100)
-            buyScore = Math.max(0, Math.min(100, Math.round(buyScore)));
-            sellScore = Math.max(0, Math.min(100, Math.round(sellScore)));
+            // 4. Independent AI Analysis (Gemini / OpenAI)
+            let gemRes = null, oaiRes = null;
+            let aiScore = 0;
+            let aiDir = 'NO_TRADE';
 
-            const isBuy = buyScore >= sellScore;
-            const finalScore = isBuy ? buyScore : sellScore;
-            const dir = isBuy ? 'BUY' : 'SELL';
-
-            // 4. Quality Rating & Threshold Check
-            let quality = 'C';
-            if (finalScore >= 90) quality = 'A+';
-            else if (finalScore >= 80) quality = 'A';
-            else if (finalScore >= 72) quality = 'B';
-            else if (finalScore >= 65) quality = 'C';
-            else quality = 'NO_TRADE';
-
-            const minThreshold = state.minScoreThreshold || 70;
-            if (finalScore < minThreshold && !explicitTfStr) {
-                console.log(`[NO TRADE] ${assetKey}: Score (${finalScore}) < Threshold (${minThreshold}) -> Insufficient confluence`);
-                return null;
+            if (state.aiConfig.geminiKey) {
+                gemRes = await GeminiAI.analyze(assetKey, ta, macSum);
+            }
+            if (state.aiConfig.openaiKey) {
+                oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum);
             }
 
-            // 5. AI Consultant (Gemini / OpenAI enrich if available, never break system)
-            let gemRes = null, oaiRes = null;
-            if (state.aiConfig.geminiKey) gemRes = await GeminiAI.analyze(assetKey, ta, macSum, dir, state.aiConfig.strictMode);
-            if (state.aiConfig.openaiKey) oaiRes = await OpenAI_API.analyze(assetKey, ta, macSum, dir, state.aiConfig.strictMode);
+            const aiObj = gemRes || oaiRes;
+            if (aiObj && aiObj.direction) {
+                aiDir = aiObj.direction;
+                aiScore = typeof aiObj.score === 'number' ? aiObj.score : 75;
+                if (aiDir === 'BUY') {
+                    buyScore += 10;
+                    sellScore -= 5;
+                } else if (aiDir === 'SELL') {
+                    sellScore += 10;
+                    buyScore -= 5;
+                } else if (aiDir === 'NO_TRADE') {
+                    buyScore -= 8;
+                    sellScore -= 8;
+                }
+            }
+
+            // Normalize scores (0 - 100)
+            buyScore = Math.max(0, Math.min(100, Math.round(buyScore)));
+            sellScore = Math.max(0, Math.min(100, Math.round(sellScore)));
+            marketQualityScore = Math.max(0, Math.min(100, Math.round(marketQualityScore)));
+
+            // 5. Final Decision Engine (NO FORCED DIRECTION)
+            let chosenDir = 'NO_TRADE';
+            let finalScore = 0;
+
+            const minThreshold = state.minScoreThreshold || 70;
+
+            if (buyScore >= minThreshold && buyScore > sellScore && (buyScore - sellScore >= 12)) {
+                chosenDir = 'BUY';
+                finalScore = buyScore;
+            } else if (sellScore >= minThreshold && sellScore > buyScore && (sellScore - buyScore >= 12)) {
+                chosenDir = 'SELL';
+                finalScore = sellScore;
+            } else {
+                console.log(`[DECISION: NO_TRADE] ${assetKey} -> BuyScore: ${buyScore}, SellScore: ${sellScore}, Quality: ${marketQualityScore} (Below ${minThreshold} or conflicting direction)`);
+                if (!explicitTfStr) return null;
+                // If forced via chart click
+                chosenDir = buyScore >= sellScore ? 'BUY' : 'SELL';
+                finalScore = Math.max(buyScore, sellScore);
+            }
+
+            const isBuy = chosenDir === 'BUY';
 
             // 6. Dynamic Market Structure TP / SL Calculation
             const p = asset.price || ta.currentPrice;
@@ -828,13 +888,20 @@ Evaluate this setup. Return ONLY JSON format:
             const slDist = Math.abs(entry - sl);
             const tp1Dist = Math.abs(entry - tp1);
             if (slDist <= 0 || (tp1Dist / slDist) < 1.2) {
-                console.log(`[R/R REJECT] ${assetKey}: Compressed price action unable to guarantee 1:1.5+ RR`);
+                console.log(`[R/R REJECT: NO_TRADE] ${assetKey}: Risk/Reward ratio insufficient (< 1:1.5)`);
                 return null;
             }
 
             const rr = `1 : ${(Math.abs(entry - tp2) / slDist).toFixed(1)}`;
 
-            // 7. Backtest Win Rate (Truthful, no fake numbers)
+            // 7. Quality Grade
+            let quality = 'C';
+            if (finalScore >= 90) quality = 'A+';
+            else if (finalScore >= 80) quality = 'A';
+            else if (finalScore >= 72) quality = 'B';
+            else quality = 'C';
+
+            // 8. Backtest Win Rate (Truthful, no fake numbers)
             let backtestDisplay = 'غير متوفر';
             try {
                 const btRes = await fetch(`http://187.77.174.215:2200/api/backtest?symbol=${assetKey}&timeframe=${tfStr}`);
@@ -846,40 +913,40 @@ Evaluate this setup. Return ONLY JSON format:
                 }
             } catch (e) { }
 
-            // 8. Reason Strings & Context
+            // 9. Structured Reasoning List
             const reasons = [];
-            reasons.push(`[الاتجاه]: ${ta.trend === 'Uptrend' ? 'صاعد 🟢' : 'هابط 🔴'} وتوافق شريط EMA (20/50/200)`);
-            reasons.push(`[الزخم]: مؤشر RSI (${ta.rsi}) مع تأكيد ماكد MACD (${ta.macd?.hist >= 0 ? 'إيجابي' : 'سلبي'})`);
+            reasons.push(`[الاتجاه الفني]: اتجاه ${ta.trend === 'Uptrend' ? 'صاعد 🟢' : 'هابط 🔴'} وتوافق الموفينجات EMA (20/50/200)`);
+            reasons.push(`[الزخم]: مؤشر RSI (${ta.rsi}) مع تأكيد الماكد MACD (${ta.macd?.hist >= 0 ? 'إيجابي' : 'سلبي'})`);
             reasons.push(`[المفاهيم المؤسسية SMC]: منطقة ${ta.ob !== 'None' ? ta.ob : (ta.fvg !== 'None' ? ta.fvg : 'سيولة سعرية')} + هيكل ${ta.structure}`);
-            reasons.push(`[إدارة رأس المال]: نسبة العائد للمخاطرة ${rr} (الوقف محمي بدقة ATR)`);
-            if (newsRiskInfo.warning) reasons.push(`[إدارة الأخبار]: ${newsRiskInfo.warning}`);
-            if (gemRes?.techReasoning) reasons.push(`[تحليل Gemini AI]: ${gemRes.techReasoning}`);
-            if (oaiRes?.techReasoning) reasons.push(`[تحليل OpenAI]: ${oaiRes.techReasoning}`);
+            reasons.push(`[إدارة المخاطر]: نسبة العائد للمخاطرة ${rr} (الوقف محمي بدقة ATR أسفل/أعلى القيعان)`);
+            if (newsRiskInfo.warning) reasons.push(`[الأخبار الاقتصادية]: ${newsRiskInfo.warning}`);
+            if (aiObj?.reasoning) reasons.push(`[تحليل الذكاء الاصطناعي]: ${aiObj.reasoning}`);
 
-            const sources = ['خوارزمية كمية (Quantitative Engine)'];
+            const sources = ['الخوارزمية الكمية (Quantitative Engine)'];
             if (gemRes) sources.push('Gemini AI');
             if (oaiRes) sources.push('OpenAI GPT');
 
             const styleMap = { scalping: 'سكالبينج (15M)', swing: 'سوينغ (4H/يومي)', hedger: 'تحوط كلي (1D)', daytrade: 'تداول يومي (1H)', all: 'تداول يومي (1H)' };
             const styleLabel = styleMap[styleCode] || 'تداول يومي (1H)';
 
-            console.log(`[SIGNAL GENERATED] ${assetKey} ${dir} | Score: ${finalScore}/100 | Quality: ${quality} | RR: ${rr}`);
+            console.log(`[DECISION: ${chosenDir}] ${assetKey} | Score: ${finalScore}/100 | Quality: ${quality} | RR: ${rr} | AI: ${aiDir} (${aiScore})`);
 
             return {
                 id: `sig-${assetKey}-${Date.now()}`,
                 asset: asset.category,
                 symbol: assetKey,
                 title: `${isBuy ? 'شراء' : 'بيع'} ${asset.name}`,
-                type: dir,
-                decision: dir,
+                type: chosenDir,
+                decision: chosenDir,
                 timeframe: styleCode,
                 timeframeLabel: styleLabel,
                 entry: parseFloat(entry.toFixed(dp)),
                 tp1, tp2, tp3, sl, rr,
                 score: finalScore,
-                confidence: finalScore, // Real quantitative score
+                confidence: finalScore, // True mathematical score, no manipulation
                 quality: quality,
                 backtestWinRate: backtestDisplay,
+                aiScore: aiScore > 0 ? `${aiScore}/100` : 'مستقل',
                 riskLevel: newsRiskInfo.level === 'HIGH' ? 'مرتفع ⚠️' : (finalScore >= 80 ? 'منخفض 🛡️' : 'متوسط ⚖️'),
                 status: 'active',
                 statusLabel: `جودة ${quality} • ${sources.join(' + ')}`,
@@ -1854,7 +1921,7 @@ Evaluate this setup. Return ONLY JSON format:
         document.getElementById('modal-asset-badge').textContent = sig.symbol;
         document.getElementById('modal-signal-title').textContent = `${sig.title} (${sig.timeframeLabel})`;
         document.getElementById('modal-status-tag').textContent = sig.statusLabel;
-        document.getElementById('modal-ai-accuracy-badge').innerHTML = `<i class="fa-solid fa-brain"></i> دقة AI: ${sig.confidence}%`;
+        document.getElementById('modal-ai-accuracy-badge').innerHTML = `<i class="fa-solid fa-chart-simple"></i> نقاط التوافق: ${sig.score}/100 | جودة ${sig.quality || 'A'}`;
         document.getElementById('modal-entry').textContent = formatPrice(sig.entry, sig.asset);
         document.getElementById('modal-tp1').textContent = formatPrice(sig.tp1, sig.asset);
         document.getElementById('modal-tp2').textContent = formatPrice(sig.tp2, sig.asset);
@@ -1865,7 +1932,7 @@ Evaluate this setup. Return ONLY JSON format:
         const lead = document.getElementById('modal-ai-lead-text');
         if (lead) {
             const src = sig.aiSources ? sig.aiSources.join(' + ') : 'Neural Scanner';
-            lead.innerHTML = `يؤكد ${src} بثقة <strong class="text-gold">${sig.confidence}%</strong> أن السعر عند <strong class="text-gold">${formatPrice(sig.entry, sig.asset)}</strong> منطقة تجميع خوارزمية. RSI: <strong class="text-gold">${ta.rsi}</strong> | EMA: <strong class="text-gold">${ta.ema50 > ta.ema200 ? 'اتجاه صاعد 🟢' : 'اتجاه هابط 🔴'}</strong>`;
+            lead.innerHTML = `الخوارزمية الكمية تؤكد إشارة <strong class="text-gold">${sig.title}</strong> عند <strong class="text-gold">${formatPrice(sig.entry, sig.asset)}</strong> بنقاط توافق <strong class="text-gold">${sig.score}/100</strong> ونسبة نجاح تاريخية (Backtest): <strong class="text-gold">${sig.backtestWinRate || 'غير متوفر'}</strong> | المخاطرة: <strong class="text-gold">${sig.riskLevel || 'متوازنة'}</strong>. RSI: <strong class="text-gold">${ta.rsi}</strong> | الموفينجات: <strong class="text-gold">${ta.ema50 > ta.ema200 ? 'صاعد 🟢' : 'هابط 🔴'}</strong>`;
         }
         const rl = document.getElementById('modal-reasons-list');
         if (rl) rl.innerHTML = sig.reasons.map(r => `<li>${r}</li>`).join('');
