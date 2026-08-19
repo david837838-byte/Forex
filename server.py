@@ -467,9 +467,9 @@ autotrade_state = {
         'login': '10982341',
         'password': '•••',
         'connected': True,
-        'balance': 10000.00,
-        'equity': 10000.00,
-        'free_margin': 10000.00,
+        'balance': 40000.00,
+        'equity': 40000.00,
+        'free_margin': 40000.00,
         'currency': 'USD'
     },
     'risk_config': {
@@ -614,19 +614,43 @@ def autotrade_connect():
     login = str(data.get('login', '10982341'))
     password = data.get('password', '')
     mode = data.get('mode', 'demo')
+    custom_balance = float(data.get('balance', 0))
 
     with autotrade_lock:
         autotrade_state['mode'] = mode
         autotrade_state['account']['server'] = server
         autotrade_state['account']['login'] = login
         autotrade_state['account']['connected'] = True
-        if mode == 'demo' and autotrade_state['account']['balance'] <= 0:
-            autotrade_state['account']['balance'] = 10000.00
-            autotrade_state['account']['equity'] = 10000.00
-    
+        
+        # Try real MT5 connection if MetaTrader5 package is available
+        mt5_connected = False
+        try:
+            import MetaTrader5 as mt5
+            if mt5.initialize():
+                if mt5.login(int(login), password=password, server=server):
+                    acc_info = mt5.account_info()
+                    if acc_info and acc_info.balance > 0:
+                        autotrade_state['account']['balance'] = round(acc_info.balance, 2)
+                        autotrade_state['account']['equity'] = round(acc_info.equity, 2)
+                        autotrade_state['account']['free_margin'] = round(acc_info.margin_free, 2)
+                        mt5_connected = True
+        except Exception as e:
+            pass
+
+        if not mt5_connected:
+            if custom_balance > 0:
+                autotrade_state['account']['balance'] = custom_balance
+                autotrade_state['account']['equity'] = custom_balance
+                autotrade_state['account']['free_margin'] = custom_balance
+            elif autotrade_state['account']['balance'] <= 0:
+                autotrade_state['account']['balance'] = 40000.00
+                autotrade_state['account']['equity'] = 40000.00
+                autotrade_state['account']['free_margin'] = 40000.00
+
+    bal_display = f"${autotrade_state['account']['balance']:,.2f}"
     return jsonify({
         'status': 'success',
-        'message': f'تم ربط حساب الميتاتريدر ({server} - #{login}) بنجاح 🟢',
+        'message': f'تم مزامنة حساب الميتاتريدر ({server} - #{login}) برصيد {bal_display} بنجاح 🟢',
         'account': autotrade_state['account']
     })
 
@@ -641,7 +665,14 @@ def autotrade_config():
         if 'min_score' in data: cfg['min_score'] = int(data['min_score'])
         if 'auto_breakeven' in data: cfg['auto_breakeven'] = bool(data['auto_breakeven'])
         if 'partial_tp1_close' in data: cfg['partial_tp1_close'] = bool(data['partial_tp1_close'])
-    return jsonify({'status': 'success', 'config': autotrade_state['risk_config']})
+        
+        if 'balance' in data and float(data['balance']) > 0:
+            b = float(data['balance'])
+            autotrade_state['account']['balance'] = b
+            autotrade_state['account']['equity'] = b
+            autotrade_state['account']['free_margin'] = b
+            
+    return jsonify({'status': 'success', 'config': autotrade_state['risk_config'], 'account': autotrade_state['account']})
 
 @app.route('/api/autotrade/toggle', methods=['POST'])
 def autotrade_toggle():

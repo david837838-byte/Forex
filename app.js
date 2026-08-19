@@ -2769,7 +2769,7 @@ Evaluate objectively. Return ONLY valid JSON:
         state: {
             enabled: false,
             mode: 'demo',
-            account: { balance: 10000, equity: 10000, free_margin: 10000 },
+            account: { balance: 40000, equity: 40000, free_margin: 40000 },
             risk_config: { risk_percent: 1.0, max_lot_cap: 0.5, max_open_trades: 3, min_score: 75, auto_breakeven: true, partial_tp1_close: true },
             open_positions: [],
             history: []
@@ -2920,10 +2920,11 @@ Evaluate objectively. Return ONLY valid JSON:
                 const auto_breakeven = document.getElementById('at-auto-be')?.checked ?? true;
                 const partial_tp1_close = document.getElementById('at-partial-tp1')?.checked ?? true;
 
+                const balance = parseFloat(document.getElementById('at-account-balance')?.value || 40000);
                 const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ risk_percent, max_lot_cap, max_open_trades, min_score, auto_breakeven, partial_tp1_close })
+                    body: JSON.stringify({ risk_percent, max_lot_cap, max_open_trades, min_score, auto_breakeven, partial_tp1_close, balance })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
@@ -2941,11 +2942,12 @@ Evaluate objectively. Return ONLY valid JSON:
                 const login = document.getElementById('at-login-num')?.value.trim() || '10982341';
                 const password = document.getElementById('at-password')?.value || '';
                 const mode = document.getElementById('at-trading-mode')?.value || 'demo';
+                const balance = parseFloat(document.getElementById('at-account-balance')?.value || 40000);
 
                 const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/connect`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ server, login, password, mode })
+                    body: JSON.stringify({ server, login, password, mode, balance })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
