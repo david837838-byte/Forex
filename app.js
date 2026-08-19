@@ -1508,6 +1508,11 @@ Evaluate objectively. Return ONLY valid JSON:
 
                         signalsData.sort((a, b) => b.score - a.score);
                         renderSignals();
+
+                        // Dispatch to AutoTrade Engine if Signal meets AutoTrade criteria
+                        if (AutoTrade.state.enabled && sig.score >= (AutoTrade.state.risk_config?.min_score || 75)) {
+                            AutoTrade.executeSignal(sig);
+                        }
                     }
                 } catch (err) {
                     console.warn(`Evaluation error for ${key}:`, err);
@@ -2755,5 +2760,295 @@ Evaluate objectively. Return ONLY valid JSON:
             evaluateSignals(true);
         });
     }
+
+
+    // ============================================================
+    // AUTO-TRADING & BROKER BRIDGE CLIENT CONTROLLER
+    // ============================================================
+    const AutoTrade = {
+        state: {
+            enabled: false,
+            mode: 'demo',
+            account: { balance: 10000, equity: 10000, free_margin: 10000 },
+            risk_config: { risk_percent: 1.0, max_lot_cap: 0.5, max_open_trades: 3, min_score: 75, auto_breakeven: true, partial_tp1_close: true },
+            open_positions: [],
+            history: []
+        },
+
+        getApiHost() {
+            return window.location.hostname || '187.77.174.215';
+        },
+
+        async syncStatus() {
+            try {
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/status`, { cache: 'no-cache' });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.state = data;
+                    this.renderUI();
+                }
+            } catch (e) {
+                // Silently fallback if server is busy
+            }
+        },
+
+        renderUI() {
+            // Update Header Button & Master Toggle
+            const statusText = document.getElementById('autotrade-status-text');
+            const masterToggle = document.getElementById('autotrade-master-toggle');
+            const masterStatus = document.getElementById('autotrade-master-status');
+            const panelBtn = document.getElementById('autotrade-panel-btn');
+
+            if (masterToggle) masterToggle.checked = this.state.enabled;
+
+            if (this.state.enabled) {
+                if (statusText) statusText.innerHTML = `التداول الآلي: <strong class="text-success">نشط 🟢</strong>`;
+                if (masterStatus) { masterStatus.className = 'badge badge-live'; masterStatus.innerHTML = 'نشط 🟢 (يراقب ويفتح الصفقات)'; }
+                if (panelBtn) panelBtn.style.boxShadow = '0 0 20px rgba(0,230,118,0.45)';
+            } else {
+                if (statusText) statusText.innerHTML = `التداول الآلي (Auto-Trade)`;
+                if (masterStatus) { masterStatus.className = 'badge badge-warning'; masterStatus.innerHTML = 'متوقف 🔴'; }
+                if (panelBtn) panelBtn.style.boxShadow = '0 0 15px rgba(255,215,0,0.25)';
+            }
+
+            // Update Account Metrics
+            const acc = this.state.account || {};
+            const balEl = document.getElementById('at-balance-val');
+            const eqEl = document.getElementById('at-equity-val');
+            const marEl = document.getElementById('at-margin-val');
+            const pnlEl = document.getElementById('at-floating-pnl-val');
+            const countEl = document.getElementById('at-open-count');
+
+            if (balEl) balEl.textContent = `$${(acc.balance || 10000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+            if (eqEl) eqEl.textContent = `$${(acc.equity || 10000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+            if (marEl) marEl.textContent = `$${(acc.free_margin || 10000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+
+            const openPos = this.state.open_positions || [];
+            if (countEl) countEl.textContent = openPos.length;
+
+            let totalFloating = 0;
+            openPos.forEach(p => { totalFloating += (p.pnl || 0); });
+
+            if (pnlEl) {
+                const s = totalFloating >= 0 ? '+' : '';
+                pnlEl.textContent = `${s}$${totalFloating.toFixed(2)}`;
+                pnlEl.style.color = totalFloating >= 0 ? 'var(--success)' : 'var(--danger)';
+            }
+
+            // Render Open Positions Table
+            const posTbody = document.getElementById('at-positions-tbody');
+            if (posTbody) {
+                if (openPos.length === 0) {
+                    posTbody.innerHTML = `<tr><td colspan="10" style="padding: 2.5rem 1rem; color: var(--text-secondary);"><i class="fa-solid fa-radar fa-beat" style="color:var(--gold); font-size:1.5rem; display:block; margin-bottom:0.5rem;"></i>لا توجد صفقات مفتوحة حالياً. عند توليد فرصة تستوفي شروطك (النقاط >= ${this.state.risk_config.min_score || 75}) سيتم فتحها هنا آلياً.</td></tr>`;
+                } else {
+                    posTbody.innerHTML = openPos.map(p => {
+                        const isBuy = p.type === 'BUY';
+                        const pClass = (p.pnl || 0) >= 0 ? 'text-success' : 'text-danger';
+                        const s = (p.pnl || 0) >= 0 ? '+' : '';
+                        return `<tr>
+                            <td><strong style="color:var(--text-secondary); font-family:monospace;">#${p.ticket}</strong></td>
+                            <td><strong style="color:var(--gold);">${p.symbol}</strong></td>
+                            <td><span class="badge ${isBuy ? 'badge-buy' : 'badge-sell'}">${p.type}</span></td>
+                            <td><strong>${p.lot}</strong></td>
+                            <td>${p.entry}</td>
+                            <td><strong>${p.current_price || p.entry}</strong></td>
+                            <td class="text-danger">${p.sl}</td>
+                            <td class="text-success">${p.tp1}</td>
+                            <td><strong class="${pClass}">${s}$${(p.pnl || 0).toFixed(2)}</strong></td>
+                            <td><button class="btn btn-sm btn-outline at-close-btn" data-ticket="${p.ticket}" style="border-color:var(--danger); color:var(--danger); padding:0.25rem 0.6rem;"><i class="fa-solid fa-xmark"></i> إغلاق</button></td>
+                        </tr>`;
+                    }).join('');
+
+                    // Connect Close Buttons
+                    posTbody.querySelectorAll('.at-close-btn').forEach(btn => {
+                        btn.addEventListener('click', async (e) => {
+                            const ticket = e.currentTarget.getAttribute('data-ticket');
+                            await AutoTrade.closePosition(ticket);
+                        });
+                    });
+                }
+            }
+
+            // Render History Table
+            const histTbody = document.getElementById('at-history-tbody');
+            const history = this.state.history || [];
+            if (histTbody && history.length > 0) {
+                histTbody.innerHTML = history.map(h => {
+                    const isProfit = (h.pnl || 0) >= 0;
+                    const pClass = isProfit ? 'text-success' : 'text-danger';
+                    const s = isProfit ? '+' : '';
+                    return `<tr>
+                        <td style="font-family:monospace;">#${h.ticket}</td>
+                        <td><strong>${h.symbol}</strong></td>
+                        <td><span class="badge ${h.type === 'BUY' ? 'badge-buy' : 'badge-sell'}">${h.type}</span></td>
+                        <td>${h.lot}</td>
+                        <td>${h.entry}</td>
+                        <td>${h.close_price || '—'}</td>
+                        <td><span class="badge ${isProfit ? 'badge-gold' : 'badge-warning'}">${h.status}</span></td>
+                        <td><strong class="${pClass}">${s}$${(h.pnl || 0).toFixed(2)}</strong></td>
+                        <td>${h.close_time || 'الآن'}</td>
+                    </tr>`;
+                }).join('');
+            }
+        },
+
+        async toggleMaster(forceVal = null) {
+            try {
+                const payload = forceVal !== null ? { enabled: forceVal } : {};
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.state.enabled = data.enabled;
+                    this.renderUI();
+                }
+            } catch (e) {
+                console.warn('AutoTrade toggle error:', e);
+            }
+        },
+
+        async saveConfig() {
+            try {
+                const risk_percent = parseFloat(document.getElementById('at-risk-percent')?.value || 1.0);
+                const max_lot_cap = parseFloat(document.getElementById('at-max-lot')?.value || 0.5);
+                const max_open_trades = parseInt(document.getElementById('at-max-open')?.value || 3);
+                const min_score = parseInt(document.getElementById('at-min-score')?.value || 75);
+                const auto_breakeven = document.getElementById('at-auto-be')?.checked ?? true;
+                const partial_tp1_close = document.getElementById('at-partial-tp1')?.checked ?? true;
+
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ risk_percent, max_lot_cap, max_open_trades, min_score, auto_breakeven, partial_tp1_close })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert('✅ تم حفظ قواعد إدارة المخاطر وتطبيقها على الصفقات الآلية فوراً!');
+                    this.syncStatus();
+                }
+            } catch (e) {
+                alert('فشل حفظ الإعدادات');
+            }
+        },
+
+        async connectAccount() {
+            try {
+                const server = document.getElementById('at-server-name')?.value.trim() || 'MetaQuotes-Demo';
+                const login = document.getElementById('at-login-num')?.value.trim() || '10982341';
+                const password = document.getElementById('at-password')?.value || '';
+                const mode = document.getElementById('at-trading-mode')?.value || 'demo';
+
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/connect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server, login, password, mode })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert(data.message);
+                    this.syncStatus();
+                }
+            } catch (e) {
+                alert('فشل الاتصال بسيرفر الميتاتريدر');
+            }
+        },
+
+        async executeSignal(signal) {
+            if (!this.state.enabled) return;
+            try {
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        symbol: signal.symbol,
+                        type: signal.type,
+                        entry: signal.entry,
+                        sl: signal.sl,
+                        tp1: signal.tp1,
+                        tp2: signal.tp2,
+                        tp3: signal.tp3,
+                        score: signal.score || 80
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    console.log(`[AUTOTRADE DISPATCHED] ${signal.symbol} ${signal.type}: ${data.message}`);
+                    this.syncStatus();
+                }
+            } catch (e) {
+                console.warn('AutoTrade execute error:', e);
+            }
+        },
+
+        async closePosition(ticket) {
+            try {
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/close`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticket })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.syncStatus();
+                }
+            } catch (e) {
+                console.warn('Close position error:', e);
+            }
+        }
+    };
+
+
+    // ============================================================
+    // AUTOTRADE MODAL & UI CONTROLLERS
+    // ============================================================
+    const atModal = document.getElementById('autotrade-modal');
+    const atPanelBtn = document.getElementById('autotrade-panel-btn');
+    const atModalClose = document.getElementById('autotrade-modal-close-btn');
+    const atModalOverlay = document.getElementById('autotrade-modal-overlay');
+    const atMasterToggle = document.getElementById('autotrade-master-toggle');
+    const atSaveConfigBtn = document.getElementById('save-at-config-btn');
+    const atSaveConnectBtn = document.getElementById('save-at-connect-btn');
+
+    if (atPanelBtn && atModal) {
+        atPanelBtn.addEventListener('click', () => {
+            atModal.classList.add('active');
+            AutoTrade.syncStatus();
+        });
+    }
+    if (atModalClose) atModalClose.addEventListener('click', () => atModal.classList.remove('active'));
+    if (atModalOverlay) atModalOverlay.addEventListener('click', () => atModal.classList.remove('active'));
+
+    if (atMasterToggle) {
+        atMasterToggle.addEventListener('change', (e) => {
+            AutoTrade.toggleMaster(e.target.checked);
+        });
+    }
+
+    if (atSaveConfigBtn) atSaveConfigBtn.addEventListener('click', () => AutoTrade.saveConfig());
+    if (atSaveConnectBtn) atSaveConnectBtn.addEventListener('click', () => AutoTrade.connectAccount());
+
+    // AutoTrade Modal Tabs Switching
+    document.querySelectorAll('.admin-tab-btn[data-attab]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            document.querySelectorAll('.admin-tab-btn[data-attab]').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.at-tab-content').forEach(c => { c.style.display = 'none'; c.classList.remove('active'); });
+            
+            e.currentTarget.classList.add('active');
+            const targetTab = document.getElementById(`attab-${e.currentTarget.getAttribute('data-attab')}`);
+            if (targetTab) {
+                targetTab.style.display = 'block';
+                targetTab.classList.add('active');
+            }
+        });
+    });
+
+    // AutoTrade Status Polling every 2.5 seconds
+    setInterval(() => { AutoTrade.syncStatus(); }, 2500);
+    AutoTrade.syncStatus();
+
 
 }); // End DOMContentLoaded

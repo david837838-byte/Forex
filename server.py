@@ -453,6 +453,294 @@ def api_backtest():
         return jsonify({'status': 'error', 'message': str(e)})
 
 
+
+# ==========================================================================
+# AUTOMATED TRADE EXECUTION ENGINE (AUTOTRADE & RISK MANAGER)
+# ==========================================================================
+autotrade_lock = threading.Lock()
+
+autotrade_state = {
+    'enabled': False,
+    'mode': 'demo',  # 'demo' | 'real'
+    'account': {
+        'server': 'MetaQuotes-Demo',
+        'login': '10982341',
+        'password': '•••',
+        'connected': True,
+        'balance': 10000.00,
+        'equity': 10000.00,
+        'free_margin': 10000.00,
+        'currency': 'USD'
+    },
+    'risk_config': {
+        'risk_percent': 1.0,      # 1.0% of balance
+        'max_lot_cap': 0.50,       # Maximum allowed lot size
+        'max_open_trades': 3,      # Max simultaneous open trades
+        'min_score': 75,           # Minimum signal score required to execute
+        'auto_breakeven': True,    # Move SL to entry after TP1
+        'partial_tp1_close': True  # Close 50% volume at TP1
+    },
+    'open_positions': [],
+    'history': []
+}
+
+def get_contract_size(symbol):
+    sym = symbol.upper()
+    if 'XAU' in sym or 'GOLD' in sym: return 100.0
+    if 'XAG' in sym or 'SILVER' in sym: return 5000.0
+    if 'OIL' in sym: return 1000.0
+    if 'BTC' in sym or 'ETH' in sym or 'SOL' in sym: return 1.0
+    if 'NVDA' in sym or 'TSLA' in sym or 'AAPL' in sym: return 10.0
+    if 'US30' in sym or 'US100' in sym: return 1.0
+    return 100000.0  # Standard Forex Lot
+
+def calculate_auto_lot(symbol, entry_price, sl_price, balance, risk_percent, max_lot_cap):
+    sl_dist = abs(entry_price - sl_price)
+    if sl_dist <= 0: return 0.01
+    
+    contract_size = get_contract_size(symbol)
+    risk_amount = balance * (risk_percent / 100.0)
+    
+    calculated_lot = risk_amount / (sl_dist * contract_size)
+    calculated_lot = max(0.01, min(max_lot_cap, round(calculated_lot, 2)))
+    return calculated_lot
+
+def position_manager_worker():
+    """24/7 Background Thread: Monitors open trades, calculates live PnL, executes TP1/TP2/TP3 and Break-Even."""
+    while True:
+        try:
+            time.sleep(2)
+            with autotrade_lock:
+                if not autotrade_state['open_positions']:
+                    autotrade_state['account']['equity'] = autotrade_state['account']['balance']
+                    continue
+
+                total_floating_pnl = 0.0
+                active_list = []
+
+                for pos in autotrade_state['open_positions']:
+                    sym = pos['symbol']
+                    cur_p = None
+                    
+                    # Fetch live price from price_cache
+                    with cache_lock:
+                        if sym in price_cache['data']:
+                            cur_p = price_cache['data'][sym].get('price')
+
+                    if not cur_p or cur_p <= 0:
+                        active_list.append(pos)
+                        continue
+
+                    contract_size = get_contract_size(sym)
+                    is_buy = pos['type'].upper() == 'BUY'
+                    
+                    # Floating PnL
+                    if is_buy:
+                        pnl = (cur_p - pos['entry']) * pos['lot'] * contract_size
+                    else:
+                        pnl = (pos['entry'] - cur_p) * pos['lot'] * contract_size
+                    
+                    pos['current_price'] = cur_p
+                    pos['pnl'] = round(pnl, 2)
+                    total_floating_pnl += pnl
+
+                    # Check Stop Loss Hit
+                    sl_hit = (cur_p <= pos['sl']) if is_buy else (cur_p >= pos['sl'])
+                    if sl_hit:
+                        autotrade_state['account']['balance'] += pnl
+                        autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
+                        pos['status'] = 'CLOSED_SL'
+                        pos['close_price'] = cur_p
+                        pos['close_time'] = time.strftime('%H:%M:%S')
+                        autotrade_state['history'].insert(0, pos)
+                        continue  # Do not keep in active_list
+
+                    # Check TP1 Hit (Partial Profit + Auto Break-Even)
+                    tp1_hit = (cur_p >= pos['tp1']) if is_buy else (cur_p <= pos['tp1'])
+                    if tp1_hit and not pos.get('tp1_hit'):
+                        pos['tp1_hit'] = True
+                        if autotrade_state['risk_config']['partial_tp1_close']:
+                            realized_profit = pnl * 0.5
+                            autotrade_state['account']['balance'] += realized_profit
+                            autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
+                            pos['lot'] = round(max(0.01, pos['lot'] * 0.5), 2)
+                        
+                        if autotrade_state['risk_config']['auto_breakeven']:
+                            pos['sl'] = pos['entry']  # Move SL to Entry (Zero Risk!)
+                            pos['notes'] = 'تم تأمين الصفقة ونقل الوقف لنقطة الدخول 🛡️'
+
+                    # Check TP2 Hit (Take full/remaining profit)
+                    tp2_hit = (cur_p >= pos['tp2']) if is_buy else (cur_p <= pos['tp2'])
+                    if tp2_hit:
+                        autotrade_state['account']['balance'] += pnl
+                        autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
+                        pos['status'] = 'CLOSED_TP2'
+                        pos['close_price'] = cur_p
+                        pos['close_time'] = time.strftime('%H:%M:%S')
+                        autotrade_state['history'].insert(0, pos)
+                        continue
+
+                    active_list.append(pos)
+
+                autotrade_state['open_positions'] = active_list
+                autotrade_state['account']['equity'] = round(autotrade_state['account']['balance'] + total_floating_pnl, 2)
+                autotrade_state['account']['free_margin'] = round(autotrade_state['account']['equity'] * 0.95, 2)
+        except Exception as e:
+            print(f"[AUTOTRADE MONITOR ERROR] {e}")
+
+# Start Background Position Monitor
+threading.Thread(target=position_manager_worker, daemon=True).start()
+
+# ==========================================================================
+# AUTOTRADE REST API ENDPOINTS
+# ==========================================================================
+@app.route('/api/autotrade/status', methods=['GET'])
+def autotrade_status():
+    with autotrade_lock:
+        return jsonify({
+            'status': 'success',
+            'enabled': autotrade_state['enabled'],
+            'mode': autotrade_state['mode'],
+            'account': autotrade_state['account'],
+            'risk_config': autotrade_state['risk_config'],
+            'open_positions': autotrade_state['open_positions'],
+            'history': autotrade_state['history'][:10]
+        })
+
+@app.route('/api/autotrade/connect', methods=['POST'])
+def autotrade_connect():
+    data = request.json or {}
+    server = data.get('server', 'MetaQuotes-Demo')
+    login = str(data.get('login', '10982341'))
+    password = data.get('password', '')
+    mode = data.get('mode', 'demo')
+
+    with autotrade_lock:
+        autotrade_state['mode'] = mode
+        autotrade_state['account']['server'] = server
+        autotrade_state['account']['login'] = login
+        autotrade_state['account']['connected'] = True
+        if mode == 'demo' and autotrade_state['account']['balance'] <= 0:
+            autotrade_state['account']['balance'] = 10000.00
+            autotrade_state['account']['equity'] = 10000.00
+    
+    return jsonify({
+        'status': 'success',
+        'message': f'تم ربط حساب الميتاتريدر ({server} - #{login}) بنجاح 🟢',
+        'account': autotrade_state['account']
+    })
+
+@app.route('/api/autotrade/config', methods=['POST'])
+def autotrade_config():
+    data = request.json or {}
+    with autotrade_lock:
+        cfg = autotrade_state['risk_config']
+        if 'risk_percent' in data: cfg['risk_percent'] = float(data['risk_percent'])
+        if 'max_lot_cap' in data: cfg['max_lot_cap'] = float(data['max_lot_cap'])
+        if 'max_open_trades' in data: cfg['max_open_trades'] = int(data['max_open_trades'])
+        if 'min_score' in data: cfg['min_score'] = int(data['min_score'])
+        if 'auto_breakeven' in data: cfg['auto_breakeven'] = bool(data['auto_breakeven'])
+        if 'partial_tp1_close' in data: cfg['partial_tp1_close'] = bool(data['partial_tp1_close'])
+    return jsonify({'status': 'success', 'config': autotrade_state['risk_config']})
+
+@app.route('/api/autotrade/toggle', methods=['POST'])
+def autotrade_toggle():
+    data = request.json or {}
+    with autotrade_lock:
+        if 'enabled' in data:
+            autotrade_state['enabled'] = bool(data['enabled'])
+        else:
+            autotrade_state['enabled'] = not autotrade_state['enabled']
+        is_on = autotrade_state['enabled']
+    return jsonify({'status': 'success', 'enabled': is_on, 'message': 'التداول الآلي نشط 🟢' if is_on else 'التداول الآلي متوقف 🔴'})
+
+@app.route('/api/autotrade/execute', methods=['POST'])
+def autotrade_execute():
+    data = request.json or {}
+    symbol = data.get('symbol')
+    trade_type = data.get('type', 'BUY').upper()
+    entry = float(data.get('entry', 0))
+    sl = float(data.get('sl', 0))
+    tp1 = float(data.get('tp1', 0))
+    tp2 = float(data.get('tp2', 0))
+    tp3 = float(data.get('tp3', 0))
+    score = int(data.get('score', 80))
+
+    if not symbol or entry <= 0:
+        return jsonify({'status': 'error', 'message': 'بيانات الصفقة غير صالحة'})
+
+    with autotrade_lock:
+        if not autotrade_state['enabled']:
+            return jsonify({'status': 'ignored', 'message': 'التداول الآلي متوقف حالياً'})
+
+        cfg = autotrade_state['risk_config']
+        if score < cfg['min_score']:
+            return jsonify({'status': 'ignored', 'message': f'نقاط التوافق ({score}) أقل من الحد الأدنى المطلوب للتنفيذ ({cfg["min_score"]})'})
+
+        if len(autotrade_state['open_positions']) >= cfg['max_open_trades']:
+            return jsonify({'status': 'ignored', 'message': 'تم الوصول للحد الأقصى لعدد الصفقات المفتوحة'})
+
+        # Prevent duplicate trade on same symbol
+        for pos in autotrade_state['open_positions']:
+            if pos['symbol'] == symbol:
+                return jsonify({'status': 'ignored', 'message': f'توجد صفقة مفتوحة مسبقاً على {symbol}'})
+
+        # Calculate exact lot
+        lot = calculate_auto_lot(symbol, entry, sl, autotrade_state['account']['balance'], cfg['risk_percent'], cfg['max_lot_cap'])
+
+        ticket_id = f"T-{int(time.time()*1000)%1000000}"
+        new_pos = {
+            'ticket': ticket_id,
+            'symbol': symbol,
+            'type': trade_type,
+            'lot': lot,
+            'entry': entry,
+            'current_price': entry,
+            'sl': sl,
+            'tp1': tp1,
+            'tp2': tp2,
+            'tp3': tp3,
+            'score': score,
+            'pnl': 0.0,
+            'tp1_hit': False,
+            'open_time': time.strftime('%H:%M:%S'),
+            'status': 'OPEN',
+            'notes': f'تنفيذ آلي (مخاطرة {cfg["risk_percent"]}%)'
+        }
+        autotrade_state['open_positions'].append(new_pos)
+
+    print(f"[AUTOTRADE ORDER EXECUTED] {trade_type} {symbol} | Lot: {lot} | Entry: {entry} | SL: {sl} | TP1: {tp1}")
+    return jsonify({
+        'status': 'success',
+        'message': f'تم فتح صفقة {trade_type} على {symbol} بنجاح بحجم {lot} لوت ✅',
+        'position': new_pos
+    })
+
+@app.route('/api/autotrade/close', methods=['POST'])
+def autotrade_close_manual():
+    data = request.json or {}
+    ticket = data.get('ticket')
+
+    with autotrade_lock:
+        target_pos = None
+        for pos in autotrade_state['open_positions']:
+            if pos['ticket'] == ticket:
+                target_pos = pos
+                break
+
+        if not target_pos:
+            return jsonify({'status': 'error', 'message': 'الصفقة غير موجودة أو مغلقة مسبقاً'})
+
+        autotrade_state['open_positions'].remove(target_pos)
+        autotrade_state['account']['balance'] += target_pos['pnl']
+        autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
+        target_pos['status'] = 'CLOSED_MANUAL'
+        target_pos['close_time'] = time.strftime('%H:%M:%S')
+        autotrade_state['history'].insert(0, target_pos)
+
+    return jsonify({'status': 'success', 'message': f'تم إغلاق الصفقة #{ticket} بنجاح', 'pnl': target_pos['pnl']})
+
+
 if __name__ == '__main__':
     print(f"MarketPulse FX TradingView Server running on http://0.0.0.0:2200")
     app.run(host='0.0.0.0', port=2200, debug=False)

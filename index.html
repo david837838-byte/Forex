@@ -61,6 +61,9 @@
                     <span class="session-countdown" id="session-countdown"><i class="fa-regular fa-clock"></i> إغلاق
                         الجلسة: 04:22:15</span>
                 </div>
+                <button class="btn btn-gold" id="autotrade-panel-btn" style="box-shadow: 0 0 15px rgba(255,215,0,0.25); font-weight:800;">
+                    <i class="fa-solid fa-robot fa-beat-fade"></i> <span id="autotrade-status-text">التداول الآلي (Auto-Trade)</span>
+                </button>
                 <button class="btn btn-outline" id="admin-panel-btn">
                     <i class="fa-solid fa-user-shield text-gold"></i> لوحة الأدمن
                 </button>
@@ -1161,6 +1164,220 @@
     </div>
     </div>
 
+    
+    <!-- ============================================================ -->
+    <!-- AUTO-TRADING & BROKER BRIDGE MODAL -->
+    <!-- ============================================================ -->
+    <div class="modal" id="autotrade-modal">
+        <div class="modal-overlay" id="autotrade-modal-overlay"></div>
+        <div class="modal-content" style="max-width: 860px; max-height: 92vh; overflow-y: auto; background: var(--bg-dark-card); border: 1px solid var(--gold); box-shadow: 0 0 30px rgba(0,0,0,0.85);">
+            <div class="modal-header" style="border-bottom: 1px solid rgba(255,215,0,0.25); padding: 1.25rem 1.5rem; display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="width: 42px; height: 42px; border-radius: 10px; background: rgba(255,215,0,0.15); display: flex; align-items: center; justify-content: center; color: var(--gold); font-size: 1.3rem;">
+                        <i class="fa-solid fa-robot"></i>
+                    </div>
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.25rem; color: var(--text-primary);">غرفة التداول الآلي وفتح الصفقات المباشر</h3>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary);">ربط الحساب • إدارة المخاطر • تنفيذ فوري على MT4 / MT5</span>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <label class="switch" style="margin:0;">
+                        <input type="checkbox" id="autotrade-master-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                    <span id="autotrade-master-status" class="badge badge-warning" style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">متوقف 🔴</span>
+                    <button class="modal-close" id="autotrade-modal-close-btn" style="background: none; border: none; color: var(--text-secondary); font-size: 1.5rem; cursor: pointer;">&times;</button>
+                </div>
+            </div>
+
+            <div class="modal-body" style="padding: 1.25rem 1.5rem;">
+                <!-- Live Account Summary Banner -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.85rem; margin-bottom: 1.25rem;">
+                    <div class="card" style="background: rgba(15,22,35,0.7); border: 1px solid rgba(255,215,0,0.2); padding: 0.9rem; border-radius: 10px; text-align: center;">
+                        <span style="font-size: 0.78rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">رصيد الحساب (Balance)</span>
+                        <strong id="at-balance-val" style="font-size: 1.35rem; color: var(--text-primary);">$10,000.00</strong>
+                    </div>
+                    <div class="card" style="background: rgba(15,22,35,0.7); border: 1px solid rgba(0,230,118,0.2); padding: 0.9rem; border-radius: 10px; text-align: center;">
+                        <span style="font-size: 0.78rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">السيولة الحالية (Equity)</span>
+                        <strong id="at-equity-val" style="font-size: 1.35rem; color: var(--success);">$10,000.00</strong>
+                    </div>
+                    <div class="card" style="background: rgba(15,22,35,0.7); border: 1px solid rgba(0,176,255,0.2); padding: 0.9rem; border-radius: 10px; text-align: center;">
+                        <span style="font-size: 0.78rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">الهامش المتاح (Free Margin)</span>
+                        <strong id="at-margin-val" style="font-size: 1.35rem; color: var(--info);">$10,000.00</strong>
+                    </div>
+                    <div class="card" style="background: rgba(15,22,35,0.7); border: 1px solid rgba(255,215,0,0.3); padding: 0.9rem; border-radius: 10px; text-align: center;">
+                        <span style="font-size: 0.78rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">الربح العائم (Floating PnL)</span>
+                        <strong id="at-floating-pnl-val" style="font-size: 1.35rem; color: var(--gold);">$0.00</strong>
+                    </div>
+                </div>
+
+                <!-- Navigation Tabs -->
+                <div class="admin-tabs" style="display: flex; gap: 0.5rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                    <button class="admin-tab-btn active" data-attab="risk"><i class="fa-solid fa-shield-halved"></i> 1. إدارة المخاطر وسقف اللوت</button>
+                    <button class="admin-tab-btn" data-attab="positions"><i class="fa-solid fa-bolt text-gold"></i> 2. الصفقات المفتوحة (<span id="at-open-count">0</span>)</button>
+                    <button class="admin-tab-btn" data-attab="connect"><i class="fa-solid fa-plug"></i> 3. ربط حساب الميتاتريدر (MT5)</button>
+                    <button class="admin-tab-btn" data-attab="history"><i class="fa-solid fa-clock-rotate-left"></i> 4. سجل الصفقات المغلقة</button>
+                </div>
+
+                <!-- Tab 1: Risk Management & Lot Sizing -->
+                <div class="at-tab-content active" id="attab-risk">
+                    <div class="card" style="background: rgba(15,22,35,0.5); border: 1px solid rgba(255,215,0,0.2); padding: 1.25rem; border-radius: 10px;">
+                        <h4 style="color: var(--gold); font-size: 1rem; margin-bottom: 1rem;"><i class="fa-solid fa-sliders"></i> القواعد الصارمة لإدارة رأس المال (Risk Control):</h4>
+                        
+                        <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                            <div class="form-group">
+                                <label style="display: block; margin-bottom: 0.4rem; font-size: 0.88rem;">نسبة المخاطرة لكل صفقة من رأس المال (% Risk):</label>
+                                <select id="at-risk-percent" class="custom-input" style="width:100%;">
+                                    <option value="0.5">0.5% (متحفظ جداً / حسابات كبيرة)</option>
+                                    <option value="1.0" selected>1.0% (النسبة المؤسسية الموصى بها 🛡️)</option>
+                                    <option value="1.5">1.5% (متوازن ذكي)</option>
+                                    <option value="2.0">2.0% (نشط / حسابات نمو)</option>
+                                    <option value="3.0">3.0% (أقصى مخاطرة مسموحة)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label style="display: block; margin-bottom: 0.4rem; font-size: 0.88rem;">سقف اللوت الأقصى المسموح بفتحه (Max Lot Cap):</label>
+                                <input type="number" id="at-max-lot" class="custom-input" value="0.50" step="0.01" min="0.01" max="10.0" style="width:100%;">
+                                <small style="color: var(--text-secondary); font-size: 0.75rem;">حماية إضافية: لن يفتح النظام أي صفقة تتجاوز هذا اللوت إطلاقاً.</small>
+                            </div>
+                        </div>
+
+                        <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                            <div class="form-group">
+                                <label style="display: block; margin-bottom: 0.4rem; font-size: 0.88rem;">أقصى عدد صفقات مفتوحة في نفس اللحظة:</label>
+                                <select id="at-max-open" class="custom-input" style="width:100%;">
+                                    <option value="1">صفقة واحدة فقط (تركيز كامل)</option>
+                                    <option value="2">صفقتان معاً</option>
+                                    <option value="3" selected>3 صفقات كحد أقصى (موصى به)</option>
+                                    <option value="5">5 صفقات معاً</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label style="display: block; margin-bottom: 0.4rem; font-size: 0.88rem;">الحد الأدنى لجودة التوصية للدخول الآلي:</label>
+                                <select id="at-min-score" class="custom-input" style="width:100%;">
+                                    <option value="70">70 نقطة فما فوق (جميع الصفقات المتوازنة)</option>
+                                    <option value="75" selected>75 نقطة فما فوق (صفقات الجودة العالية A/A+ ⭐)</option>
+                                    <option value="80">80 نقطة فما فوق (الفرص النخبوية الذهبية فقط 🏆)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(0,230,118,0.08); border: 1px solid rgba(0,230,118,0.25); padding: 0.9rem; border-radius: 8px; margin-top: 1rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <input type="checkbox" id="at-auto-be" checked style="width: 18px; height: 18px; cursor: pointer;">
+                                <label for="at-auto-be" style="font-weight: 700; color: var(--success); cursor: pointer;">تأمين الصفقة ونقل الوقف لسعر الدخول (Auto Break-Even) عند تحقيق الهدف الأول (TP1)</label>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <input type="checkbox" id="at-partial-tp1" checked style="width: 18px; height: 18px; cursor: pointer;">
+                                <label for="at-partial-tp1" style="font-weight: 700; color: var(--gold); cursor: pointer;">إغلاق 50% من حجم العقد عند تحقيق الهدف الأول (TP1) وحجز الأرباح فوراً في الرصيد</label>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-gold" id="save-at-config-btn" style="margin-top: 1.25rem; width: 100%;">
+                            <i class="fa-solid fa-floppy-disk"></i> حفظ قواعد إدارة المخاطر وتطبيقها فوراً
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Live Open Positions -->
+                <div class="at-tab-content" id="attab-positions" style="display: none;">
+                    <div class="card" style="background: rgba(15,22,35,0.5); border: 1px solid rgba(255,215,0,0.2); padding: 1rem; border-radius: 10px;">
+                        <div class="table-responsive">
+                            <table class="custom-table" style="width:100%; text-align:center; font-size:0.85rem;">
+                                <thead>
+                                    <tr>
+                                        <th>التذكرة</th>
+                                        <th>الأصل</th>
+                                        <th>النوع</th>
+                                        <th>اللوت</th>
+                                        <th>الدخول</th>
+                                        <th>الحالي</th>
+                                        <th>الوقف (SL)</th>
+                                        <th>الهدف (TP1)</th>
+                                        <th>الأرباح ($)</th>
+                                        <th>إجراء</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="at-positions-tbody">
+                                    <tr><td colspan="10" style="padding: 2rem; color: var(--text-secondary);">لا توجد صفقات مفتوحة حالياً. عند توليد فرصة جديدة تستوفي شروطك سيتم فتحها هنا آلياً.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 3: Broker Connection Link -->
+                <div class="at-tab-content" id="attab-connect" style="display: none;">
+                    <div class="card" style="background: rgba(15,22,35,0.5); border: 1px solid rgba(0,176,255,0.25); padding: 1.25rem; border-radius: 10px;">
+                        <h4 style="color: var(--info); font-size: 1rem; margin-bottom: 1rem;"><i class="fa-solid fa-server"></i> بيانات الاتصال بمنصة MetaTrader (MT5 / MT4):</h4>
+
+                        <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                            <div class="form-group">
+                                <label style="display: block; margin-bottom: 0.4rem; font-size: 0.88rem;">سيرفر الوسيط (Broker Server):</label>
+                                <input type="text" id="at-server-name" class="custom-input" placeholder="مثال: Exness-Real11 أو ICMarketsSC-Demo" value="MetaQuotes-Demo" style="width:100%;">
+                            </div>
+
+                            <div class="form-group">
+                                <label style="display: block; margin-bottom: 0.4rem; font-size: 0.88rem;">رقم الحساب (Login / Account #):</label>
+                                <input type="text" id="at-login-num" class="custom-input" placeholder="مثال: 10982341" value="10982341" style="width:100%;">
+                            </div>
+                        </div>
+
+                        <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                            <div class="form-group">
+                                <label style="display: block; margin-bottom: 0.4rem; font-size: 0.88rem;">كلمة مرور التداول (Trading Password):</label>
+                                <input type="password" id="at-password" class="custom-input" placeholder="أدخل كلمة مرور الحساب..." value="••••••••" style="width:100%;">
+                            </div>
+
+                            <div class="form-group">
+                                <label style="display: block; margin-bottom: 0.4rem; font-size: 0.88rem;">نوع بيئة التداول:</label>
+                                <select id="at-trading-mode" class="custom-input" style="width:100%;">
+                                    <option value="demo" selected>🧪 حساب تجريبي ديمو (آمن للتجربة)</option>
+                                    <option value="real">⚠️ حساب حقيقي بأموال حقيقية (Live Real)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-outline" id="save-at-connect-btn" style="margin-top: 1rem; width: 100%; border-color: var(--info); color: var(--info);">
+                            <i class="fa-solid fa-plug-circle-check"></i> حفظ واختبار الاتصال بسيرفر الميتاتريدر
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab 4: Trade History -->
+                <div class="at-tab-content" id="attab-history" style="display: none;">
+                    <div class="card" style="background: rgba(15,22,35,0.5); border: 1px solid var(--border-color); padding: 1rem; border-radius: 10px;">
+                        <div class="table-responsive">
+                            <table class="custom-table" style="width:100%; text-align:center; font-size:0.85rem;">
+                                <thead>
+                                    <tr>
+                                        <th>التذكرة</th>
+                                        <th>الأصل</th>
+                                        <th>النوع</th>
+                                        <th>اللوت</th>
+                                        <th>سعر الدخول</th>
+                                        <th>سعر الإغلاق</th>
+                                        <th>النتيجة</th>
+                                        <th>الربح / الخسارة</th>
+                                        <th>الوقت</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="at-history-tbody">
+                                    <tr><td colspan="9" style="padding: 2rem; color: var(--text-secondary);">لا توجد صفقات مغلقة في هذه الجلسة حتى الآن.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+
     <!-- Footer -->
     <footer class="footer">
         <div class="footer-container">
@@ -1183,7 +1400,7 @@
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 
     <!-- Main JavaScript App Logic -->
-    <script src="app.js?v=18"></script>
+    <script src="app.js?v=19"></script>
 
     <!-- AI Assistant Floating Widget -->
     <div id="ai-assistant-widget" class="ai-widget-container">
