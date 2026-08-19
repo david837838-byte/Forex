@@ -607,20 +607,153 @@ def autotrade_status():
             'history': autotrade_state['history'][:10]
         })
 
+
+# ==========================================================================
+# METAAPI.CLOUD REST API DIRECT BROKER CONNECTOR
+# ==========================================================================
+metaapi_config = {
+    'token': '',
+    'account_id': '',
+    'connected': False,
+    'last_sync': 0
+}
+
+def metaapi_http_request(endpoint, method='GET', payload=None, token=None):
+    use_token = token or metaapi_config.get('token')
+    if not use_token: return None
+    
+    headers = {
+        'auth-token': use_token,
+        'Content-Type': 'application/json',
+        'User-Agent': 'MarketPulse-FX/1.0'
+    }
+    
+    url = f"https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai{endpoint}"
+    if 'provisioning' in endpoint:
+        url = f"https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai{endpoint.replace('/provisioning', '')}"
+    
+    try:
+        data_bytes = json.dumps(payload).encode('utf-8') if payload else None
+        req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        print(f"[METAAPI HTTP ERROR] {e.code}: {e.read().decode('utf-8', errors='ignore')}")
+        return None
+    except Exception as e:
+        print(f"[METAAPI ERROR] {e}")
+        return None
+
+def metaapi_deploy_account(token, server, login, password):
+    """Deploys and connects MT5 account to MetaApi Cloud."""
+    payload = {
+        "name": f"MarketPulse_{server}_{login}",
+        "type": "cloud",
+        "login": str(login),
+        "password": str(password),
+        "server": str(server),
+        "platform": "mt5",
+        "magic": 888999
+    }
+    
+    # 1. Search existing or create new account
+    res = metaapi_http_request('/provisioning/users/current/accounts', method='POST', payload=payload, token=token)
+    if res and 'id' in res:
+        acc_id = res['id']
+        # 2. Deploy instance
+        metaapi_http_request(f'/provisioning/users/current/accounts/{acc_id}/deploy', method='POST', token=token)
+        return acc_id
+    
+    # If already exists, search by login
+    accs = metaapi_http_request('/provisioning/users/current/accounts', method='GET', token=token)
+    if isinstance(accs, list):
+        for a in accs:
+            if str(a.get('login')) == str(login):
+                acc_id = a.get('id')
+                metaapi_http_request(f'/provisioning/users/current/accounts/{acc_id}/deploy', method='POST', token=token)
+                return acc_id
+    return None
+
+def metaapi_sync_worker():
+    """Background 2-Second Poller for MetaApi Cloud Live Broker Data."""
+    while True:
+        try:
+            time.sleep(2.5)
+            if not metaapi_config.get('connected') or not metaapi_config.get('account_id'):
+                continue
+            
+            acc_id = metaapi_config['account_id']
+            token = metaapi_config['token']
+            
+            # Fetch Live Account Info
+            info = metaapi_http_request(f'/users/current/accounts/{acc_id}/information', method='GET', token=token)
+            if info:
+                with autotrade_lock:
+                    b = info.get('balance', 0)
+                    eq = info.get('equity', 0)
+                    mar = info.get('freeMargin', 0)
+                    if b > 0:
+                        autotrade_state['account']['balance'] = round(b, 2)
+                        autotrade_state['account']['equity'] = round(eq, 2)
+                        autotrade_state['account']['free_margin'] = round(mar, 2)
+                        autotrade_state['account']['bridge_mode'] = 'METAAPI_CLOUD_LIVE'
+                        autotrade_state['account']['last_sync_time'] = time.strftime('%H:%M:%S')
+
+            # Fetch Live Positions
+            raw_positions = metaapi_http_request(f'/users/current/accounts/{acc_id}/positions', method='GET', token=token)
+            if isinstance(raw_positions, list):
+                pos_list = []
+                for p in raw_positions:
+                    pos_list.append({
+                        'ticket': str(p.get('id', p.get('ticket', ''))),
+                        'symbol': p.get('symbol'),
+                        'type': 'BUY' if 'BUY' in p.get('type', '') else 'SELL',
+                        'lot': float(p.get('volume', 0.01)),
+                        'entry': float(p.get('openPrice', 0)),
+                        'current_price': float(p.get('currentPrice', 0)),
+                        'sl': float(p.get('stopLoss', 0)),
+                        'tp1': float(p.get('takeProfit', 0)),
+                        'pnl': round(float(p.get('profit', 0) + p.get('swap', 0)), 2),
+                        'notes': 'MetaApi Cloud Live'
+                    })
+                with autotrade_lock:
+                    autotrade_state['open_positions'] = pos_list
+        except Exception as e:
+            print(f"[METAAPI SYNC ERROR] {e}")
+
+threading.Thread(target=metaapi_sync_worker, daemon=True).start()
+
 @app.route('/api/autotrade/connect', methods=['POST'])
 def autotrade_connect():
     data = request.json or {}
-    server = data.get('server', 'MetaQuotes-Demo')
+    server = data.get('server', 'JustMarkets-Demo')
     login = str(data.get('login', '10982341'))
     password = data.get('password', '')
     mode = data.get('mode', 'demo')
-    custom_balance = float(data.get('balance', 0))
+    metaapi_token = data.get('metaapi_token', '').strip()
 
     with autotrade_lock:
         autotrade_state['mode'] = mode
         autotrade_state['account']['server'] = server
         autotrade_state['account']['login'] = login
         autotrade_state['account']['connected'] = True
+        
+        # 1. If MetaApi Cloud Token is provided, deploy cloud bridge directly
+        if metaapi_token:
+            acc_id = metaapi_deploy_account(metaapi_token, server, login, password)
+            if acc_id:
+                metaapi_config['token'] = metaapi_token
+                metaapi_config['account_id'] = acc_id
+                metaapi_config['connected'] = True
+                autotrade_state['account']['bridge_mode'] = 'METAAPI_CLOUD_LIVE'
+                print(f"[METAAPI CLOUD CONNECTED] Account ID: {acc_id} for {server} #{login}")
+                return jsonify({
+                    'status': 'success',
+                    'message': f'تم الربط السحابي المباشر عبر MetaApi بحساب ({server} - #{login}) بنجاح 🟢',
+                    'account': autotrade_state['account']
+                })
+        
+        # 2. Local/VPS launcher fallback
         if login and password:
             launch_vps_mt5_terminal(login, password, server)
         
