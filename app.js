@@ -2820,9 +2820,18 @@ Evaluate objectively. Return ONLY valid JSON:
             const pnlEl = document.getElementById('at-floating-pnl-val');
             const countEl = document.getElementById('at-open-count');
 
-            if (balEl) balEl.textContent = `$${(acc.balance || 10000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
-            if (eqEl) eqEl.textContent = `$${(acc.equity || 10000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
-            if (marEl) marEl.textContent = `$${(acc.free_margin || 10000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+            if (balEl) balEl.textContent = `$${(acc.balance || 40000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+            if (eqEl) eqEl.textContent = `$${(acc.equity || 40000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+            if (marEl) marEl.textContent = `$${(acc.free_margin || 40000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+
+            const syncBadge = document.getElementById('at-last-sync-badge');
+            const bridgeText = document.getElementById('at-bridge-status-text');
+            if (syncBadge && acc.last_sync_time) {
+                syncBadge.textContent = `مزامنة حية من البروكر: ${acc.last_sync_time}`;
+            }
+            if (bridgeText && acc.bridge_mode === 'EA_WEBHOOK_LIVE') {
+                bridgeText.innerHTML = `مربوط بالبروكر عبر الإكسبرت (مباشر 🟢)`;
+            }
 
             const openPos = this.state.open_positions || [];
             if (countEl) countEl.textContent = openPos.length;

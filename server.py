@@ -740,7 +740,20 @@ def autotrade_execute():
         }
         autotrade_state['open_positions'].append(new_pos)
 
-    print(f"[AUTOTRADE ORDER EXECUTED] {trade_type} {symbol} | Lot: {lot} | Entry: {entry} | SL: {sl} | TP1: {tp1}")
+    global autotrade_command_queue
+    autotrade_command_queue.append({
+        'action': 'OPEN',
+        'ticket': ticket_id,
+        'symbol': symbol,
+        'type': trade_type,
+        'lot': lot,
+        'entry': entry,
+        'sl': sl,
+        'tp1': tp1,
+        'tp2': tp2,
+        'tp3': tp3
+    })
+    print(f"[AUTOTRADE ORDER EXECUTED & QUEUED TO EA] {trade_type} {symbol} | Lot: {lot} | Entry: {entry} | SL: {sl} | TP1: {tp1}")
     return jsonify({
         'status': 'success',
         'message': f'تم فتح صفقة {trade_type} على {symbol} بنجاح بحجم {lot} لوت ✅',
@@ -766,10 +779,74 @@ def autotrade_close_manual():
         autotrade_state['account']['balance'] += target_pos['pnl']
         autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
         target_pos['status'] = 'CLOSED_MANUAL'
+        global autotrade_command_queue
+        autotrade_command_queue.append({
+            'action': 'CLOSE',
+            'ticket': ticket
+        })
         target_pos['close_time'] = time.strftime('%H:%M:%S')
         autotrade_state['history'].insert(0, target_pos)
 
     return jsonify({'status': 'success', 'message': f'تم إغلاق الصفقة #{ticket} بنجاح', 'pnl': target_pos['pnl']})
+
+
+
+# ==========================================================================
+# DUAL-CHANNEL REAL-TIME METATRADER BRIDGE (EA WEBHOOK & CLOUD BRIDGE)
+# ==========================================================================
+autotrade_command_queue = []
+
+@app.route('/api/mt5/sync', methods=['POST'])
+def mt5_ea_sync():
+    """High-Speed Real-Time Sync Endpoint called by MarketPulse_Bridge.mq5 every second."""
+    data = request.json or {}
+    login = str(data.get('login', ''))
+    server_name = str(data.get('server', ''))
+    balance = float(data.get('balance', 0))
+    equity = float(data.get('equity', 0))
+    margin = float(data.get('free_margin', 0))
+    positions = data.get('positions', [])
+
+    with autotrade_lock:
+        if balance > 0:
+            autotrade_state['account']['balance'] = round(balance, 2)
+            autotrade_state['account']['equity'] = round(equity if equity > 0 else balance, 2)
+            autotrade_state['account']['free_margin'] = round(margin if margin > 0 else balance, 2)
+            if login: autotrade_state['account']['login'] = login
+            if server_name: autotrade_state['account']['server'] = server_name
+            autotrade_state['account']['connected'] = True
+            autotrade_state['account']['bridge_mode'] = 'EA_WEBHOOK_LIVE'
+            autotrade_state['account']['last_sync_time'] = time.strftime('%H:%M:%S')
+
+        # Sync real open positions from MetaTrader terminal
+        if isinstance(positions, list) and len(positions) > 0:
+            autotrade_state['open_positions'] = positions
+
+        # Dispatch pending commands to the EA
+        global autotrade_command_queue
+        commands_to_send = list(autotrade_command_queue)
+        autotrade_command_queue = []
+
+    return jsonify({
+        'status': 'success',
+        'timestamp': time.time(),
+        'commands': commands_to_send
+    })
+
+@app.route('/api/mt5/download-ea', methods=['GET'])
+def mt5_download_ea():
+    """Provides direct download of the MarketPulse_Bridge.mq5 expert advisor."""
+    try:
+        with open("MarketPulse_Bridge.mq5", "r", encoding="utf-8") as f:
+            content = f.read()
+        from flask import Response
+        return Response(
+            content,
+            mimetype="text/plain",
+            headers={"Content-Disposition": "attachment;filename=MarketPulse_Bridge.mq5"}
+        )
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
 
 
 if __name__ == '__main__':
