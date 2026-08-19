@@ -2929,11 +2929,11 @@ Evaluate objectively. Return ONLY valid JSON:
                 const auto_breakeven = document.getElementById('at-auto-be')?.checked ?? true;
                 const partial_tp1_close = document.getElementById('at-partial-tp1')?.checked ?? true;
 
-                const balance = parseFloat(document.getElementById('at-account-balance')?.value || 40000);
+                
                 const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ risk_percent, max_lot_cap, max_open_trades, min_score, auto_breakeven, partial_tp1_close, balance })
+                    body: JSON.stringify({ risk_percent, max_lot_cap, max_open_trades, min_score, auto_breakeven, partial_tp1_close })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
@@ -2951,12 +2951,12 @@ Evaluate objectively. Return ONLY valid JSON:
                 const login = document.getElementById('at-login-num')?.value.trim() || '10982341';
                 const password = document.getElementById('at-password')?.value || '';
                 const mode = document.getElementById('at-trading-mode')?.value || 'demo';
-                const balance = parseFloat(document.getElementById('at-account-balance')?.value || 40000);
+                
 
                 const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/connect`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ server, login, password, mode, balance })
+                    body: JSON.stringify({ server, login, password, mode })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
