@@ -463,7 +463,7 @@ autotrade_state = {
     'enabled': False,
     'mode': 'demo',  # 'demo' | 'real'
     'account': {
-        'server': 'MetaQuotes-Demo',
+        'server': 'JustMarkets-Demo',
         'login': '10982341',
         'password': '•••',
         'connected': True,
@@ -621,6 +621,8 @@ def autotrade_connect():
         autotrade_state['account']['server'] = server
         autotrade_state['account']['login'] = login
         autotrade_state['account']['connected'] = True
+        if login and password:
+            launch_vps_mt5_terminal(login, password, server)
         
         # Try real MT5 connection if MetaTrader5 package is available
         mt5_connected = False
@@ -792,6 +794,25 @@ def autotrade_close_manual():
 
 
 # ==========================================================================
+
+# ==========================================================================
+# JUSTMARKETS & MULTI-BROKER HEADLESS VPS CONNECTOR
+# ==========================================================================
+def launch_vps_mt5_terminal(login, password, server):
+    """Launches and authenticates MetaTrader 5 in the background on the Linux VPS."""
+    import subprocess
+    import os
+    try:
+        wine_terminal = os.path.expanduser("~/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe")
+        if os.path.exists(wine_terminal):
+            cmd = f'DISPLAY=:0 nohup wine "{wine_terminal}" /login:{login} /password:{password} /server:{server} /portable > /dev/null 2>&1 &'
+            subprocess.Popen(cmd, shell=True)
+            print(f"[VPS MT5 CONNECTOR] Started background MT5 terminal for {server} #{login}")
+            return True
+    except Exception as e:
+        print(f"[VPS MT5 CONNECTOR ERROR] {e}")
+    return False
+
 # DUAL-CHANNEL REAL-TIME METATRADER BRIDGE (EA WEBHOOK & CLOUD BRIDGE)
 # ==========================================================================
 autotrade_command_queue = []
@@ -815,6 +836,8 @@ def mt5_ea_sync():
             if login: autotrade_state['account']['login'] = login
             if server_name: autotrade_state['account']['server'] = server_name
             autotrade_state['account']['connected'] = True
+        if login and password:
+            launch_vps_mt5_terminal(login, password, server)
             autotrade_state['account']['bridge_mode'] = 'EA_WEBHOOK_LIVE'
             autotrade_state['account']['last_sync_time'] = time.strftime('%H:%M:%S')
 

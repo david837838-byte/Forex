@@ -2947,7 +2947,7 @@ Evaluate objectively. Return ONLY valid JSON:
 
         async connectAccount() {
             try {
-                const server = document.getElementById('at-server-name')?.value.trim() || 'MetaQuotes-Demo';
+                const server = document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
                 const login = document.getElementById('at-login-num')?.value.trim() || '10982341';
                 const password = document.getElementById('at-password')?.value || '';
                 const mode = document.getElementById('at-trading-mode')?.value || 'demo';
