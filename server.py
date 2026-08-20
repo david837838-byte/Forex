@@ -452,16 +452,15 @@ def api_backtest():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
 
-
 # ==========================================================================
-# INSTITUTIONAL-GRADE PRODUCTION AUTOMATED TRADING & MT5 RISK ENGINE
+# 100% PRIVATE SELF-HOSTED REST API & INSTITUTIONAL MT5 RISK ENGINE
 # ==========================================================================
 import hashlib
 
 autotrade_lock = threading.Lock()
 execution_mutex = threading.Lock()
 
-# Security & Webhook Secret
+# Private Webhook Authentication Secret
 EA_WEBHOOK_SECRET = "marketpulse_live_bridge_sec_2026"
 
 autotrade_state = {
@@ -471,6 +470,9 @@ autotrade_state = {
     'emergency_reason': '',
     'account': {
         'connected': False,
+        'mt5_connected': False,
+        'ea_connected': False,
+        'broker_connected': False,
         'bridge_mode': 'DISCONNECTED', # 'EA_WEBHOOK_LIVE' | 'DISCONNECTED'
         'server': 'JustMarkets-Demo',
         'login': '',
@@ -483,8 +485,12 @@ autotrade_state = {
         'leverage': 100,
         'last_sync_time': '',
         'last_heartbeat': 0.0,
+        'last_account_sync': 0.0,
+        'last_position_sync': 0.0,
+        'last_market_sync': 0.0,
         'latency_ms': 0.0
     },
+    'market_data': {}, # { symbol: { bid, ask, spread, time } }
     'risk_config': {
         'risk_percent': 1.0,          # 1.0% risk per trade
         'max_lot_cap': 0.50,          # Strict lot ceiling
@@ -542,17 +548,6 @@ def log_audit_event(event_type, symbol, ticket, reason, details=None):
         print(f"[AUDIT LOG] [{entry['time']}] {event_type} | {symbol} | Ticket: {ticket} | {reason}")
     except Exception:
         pass
-
-def check_ip_rate_limit(client_ip, limit=60, window=60):
-    now = time.time()
-    if client_ip not in rate_limit_tracker:
-        rate_limit_tracker[client_ip] = []
-    # Purge old
-    rate_limit_tracker[client_ip] = [t for t in rate_limit_tracker[client_ip] if now - t < window]
-    if len(rate_limit_tracker[client_ip]) >= limit:
-        return False
-    rate_limit_tracker[client_ip].append(now)
-    return True
 
 # ==========================================================================
 # POSITION SIZING & CONTRACT SPECIFICATION ENGINE
@@ -717,6 +712,132 @@ def validate_trade_risk(signal_data):
 # ==========================================================================
 # 24/7 BACKGROUND POSITION LIFECYCLE & TRAILING STOP MANAGER
 # ==========================================================================
+def process_position_lifecycle_step(test_prices=None):
+    """Processes 1 iteration of position lifecycle checks against live or provided prices."""
+    with autotrade_lock:
+        if not autotrade_state['open_positions']:
+            autotrade_state['daily_stats']['floating_pnl'] = 0.0
+            if autotrade_state['account']['connected']:
+                autotrade_state['account']['equity'] = autotrade_state['account']['balance']
+            return
+
+        total_floating = 0.0
+        active_positions = []
+        cfg = autotrade_state['risk_config']
+        now = time.time()
+
+        for pos in autotrade_state['open_positions']:
+            sym = pos['symbol']
+            cur_p = None
+            if test_prices and sym in test_prices:
+                cur_p = test_prices[sym]
+            else:
+                with cache_lock:
+                    if sym in price_cache['data']:
+                        cur_p = price_cache['data'][sym].get('price')
+
+            if not cur_p or cur_p <= 0:
+                active_positions.append(pos)
+                continue
+
+            spec = get_symbol_spec(sym)
+            is_buy = pos['type'].upper() == 'BUY'
+
+            # Calculate Floating PnL
+            if is_buy:
+                pnl = (cur_p - pos['entry']) * pos['lot'] * spec['size']
+            else:
+                pnl = (pos['entry'] - cur_p) * pos['lot'] * spec['size']
+
+            pos['current_price'] = cur_p
+            pos['pnl'] = round(pnl, 2)
+            total_floating += pnl
+
+            # 1. Stop Loss Hit Check
+            sl_hit = (cur_p <= pos['sl']) if is_buy else (cur_p >= pos['sl'])
+            if sl_hit:
+                autotrade_state['account']['balance'] += pnl
+                autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
+                autotrade_state['daily_stats']['realized_pnl'] += pnl
+                autotrade_state['daily_stats']['consecutive_losses'] += 1
+                
+                # Cooldown check
+                if autotrade_state['daily_stats']['consecutive_losses'] >= cfg['consecutive_loss_limit']:
+                    autotrade_state['daily_stats']['cooldown_until'] = now + (cfg['loss_cooldown_minutes'] * 60)
+                    log_audit_event("COOLDOWN_TRIGGERED", sym, pos['ticket'], f"تفعيل فترة تبريد لمدة {cfg['loss_cooldown_minutes']} دقيقة بعد {cfg['consecutive_loss_limit']} خسائر متتالية")
+
+                pos['status'] = 'CLOSED_SL'
+                pos['close_price'] = cur_p
+                pos['close_time'] = time.strftime('%H:%M:%S')
+                autotrade_state['history'].insert(0, pos)
+                log_audit_event("POSITION_CLOSED_SL", sym, pos['ticket'], f"ضرب وقف الخسارة عند {cur_p} (خسارة: ${pnl:.2f})")
+                continue
+
+            # 2. TP1 Hit Check (Auto Break-Even & 50% Partial Close)
+            tp1_hit = (cur_p >= pos['tp1']) if is_buy else (cur_p <= pos['tp1'])
+            if tp1_hit and not pos.get('tp1_hit'):
+                pos['tp1_hit'] = True
+                close_vol = round(pos['lot'] * 0.50, 2)
+                if close_vol >= 0.01:
+                    realized = (pnl * 0.50)
+                    autotrade_state['account']['balance'] += realized
+                    autotrade_state['daily_stats']['realized_pnl'] += realized
+                    pos['lot'] = round(pos['lot'] - close_vol, 2)
+                    log_audit_event("TP1_PARTIAL_CLOSE", sym, pos['ticket'], f"إغلاق جزئي 50% ({close_vol} لوت) وحجز ربح ${realized:.2f}")
+
+                # Auto Break-Even Buffer
+                if cfg['auto_breakeven']:
+                    buf = spec['point'] * cfg['breakeven_buffer_pips'] * 10
+                    new_sl = round(pos['entry'] + buf if is_buy else pos['entry'] - buf, 5)
+                    if (is_buy and new_sl > pos['sl']) or (not is_buy and new_sl < pos['sl']):
+                        pos['sl'] = new_sl
+                        pos['notes'] = f"تم تأمين الصفقة ونقل الوقف للدخول ({new_sl}) 🛡️"
+                        log_audit_event("AUTO_BREAKEVEN_TRIGGERED", sym, pos['ticket'], f"نقل وقف الخسارة إلى سعر الدخول مع هامش أمان ({new_sl})")
+                        autotrade_command_queue.append({
+                            'action': 'MODIFY_SL',
+                            'ticket': pos['ticket'],
+                            'symbol': sym,
+                            'new_sl': new_sl,
+                            'new_tp': pos.get('tp2', pos['tp1'])
+                        })
+
+            # 3. TP2 Hit Check (30% Partial Close)
+            if pos.get('tp2') and not pos.get('tp2_hit'):
+                tp2_hit = (cur_p >= pos['tp2']) if is_buy else (cur_p <= pos['tp2'])
+                if tp2_hit:
+                    pos['tp2_hit'] = True
+                    close_vol = round(pos['lot'] * 0.60, 2)
+                    if close_vol >= 0.01:
+                        realized = (pnl * 0.60)
+                        autotrade_state['account']['balance'] += realized
+                        autotrade_state['daily_stats']['realized_pnl'] += realized
+                        pos['lot'] = round(pos['lot'] - close_vol, 2)
+                        log_audit_event("TP2_PARTIAL_CLOSE", sym, pos['ticket'], f"إغلاق الهدف الثاني TP2 وحجز ربح ${realized:.2f}")
+
+            # 4. TP3 Hit Check (Final Target Full Close)
+            if pos.get('tp3'):
+                tp3_hit = (cur_p >= pos['tp3']) if is_buy else (cur_p <= pos['tp3'])
+                if tp3_hit:
+                    autotrade_state['account']['balance'] += pnl
+                    autotrade_state['daily_stats']['realized_pnl'] += pnl
+                    autotrade_state['daily_stats']['consecutive_losses'] = 0
+                    pos['status'] = 'CLOSED_TP3'
+                    pos['close_price'] = cur_p
+                    pos['close_time'] = time.strftime('%H:%M:%S')
+                    autotrade_state['history'].insert(0, pos)
+                    log_audit_event("POSITION_CLOSED_TP3", sym, pos['ticket'], f"تحقيق الهدف النهائي بالكامل TP3 (ربح: ${pnl:.2f})")
+                    continue
+
+            active_positions.append(pos)
+
+        autotrade_state['open_positions'] = active_positions
+        autotrade_state['daily_stats']['floating_pnl'] = round(total_floating, 2)
+        if autotrade_state['account']['connected']:
+            autotrade_state['account']['equity'] = round(autotrade_state['account']['balance'] + total_floating, 2)
+            autotrade_state['account']['free_margin'] = round(max(0, autotrade_state['account']['equity'] - autotrade_state['account']['margin']), 2)
+            if autotrade_state['account']['margin'] > 0:
+                autotrade_state['account']['margin_level'] = round((autotrade_state['account']['equity'] / autotrade_state['account']['margin']) * 100, 2)
+
 def position_lifecycle_worker():
     """Monitors active positions, updates floating PnL, executes TP1/TP2/TP3 & Trailing Stops."""
     while True:
@@ -724,139 +845,246 @@ def position_lifecycle_worker():
             time.sleep(1.5)
             now = time.time()
             with autotrade_lock:
-                # Check MT5 heartbeat timeout
                 if autotrade_state['account']['connected'] and autotrade_state['account']['last_heartbeat'] > 0:
                     if (now - autotrade_state['account']['last_heartbeat']) > 10.0:
                         autotrade_state['account']['connected'] = False
+                        autotrade_state['account']['mt5_connected'] = False
+                        autotrade_state['account']['ea_connected'] = False
+                        autotrade_state['account']['broker_connected'] = False
                         autotrade_state['account']['bridge_mode'] = 'DISCONNECTED'
                         log_audit_event("MT5_HEARTBEAT_TIMEOUT", "SYSTEM", None, "انقطع الاتصال بالإكسبرت (Heartbeat Timeout > 10s)")
 
-                if not autotrade_state['open_positions']:
-                    autotrade_state['daily_stats']['floating_pnl'] = 0.0
-                    if autotrade_state['account']['connected']:
-                        autotrade_state['account']['equity'] = autotrade_state['account']['balance']
-                    continue
-
-                total_floating = 0.0
-                active_positions = []
-                cfg = autotrade_state['risk_config']
-
-                for pos in autotrade_state['open_positions']:
-                    sym = pos['symbol']
-                    cur_p = None
-                    with cache_lock:
-                        if sym in price_cache['data']:
-                            cur_p = price_cache['data'][sym].get('price')
-
-                    if not cur_p or cur_p <= 0:
-                        active_positions.append(pos)
-                        continue
-
-                    spec = get_symbol_spec(sym)
-                    is_buy = pos['type'].upper() == 'BUY'
-
-                    # Calculate Floating PnL
-                    if is_buy:
-                        pnl = (cur_p - pos['entry']) * pos['lot'] * spec['size']
-                    else:
-                        pnl = (pos['entry'] - cur_p) * pos['lot'] * spec['size']
-
-                    pos['current_price'] = cur_p
-                    pos['pnl'] = round(pnl, 2)
-                    total_floating += pnl
-
-                    # 1. Stop Loss Hit Check
-                    sl_hit = (cur_p <= pos['sl']) if is_buy else (cur_p >= pos['sl'])
-                    if sl_hit:
-                        autotrade_state['account']['balance'] += pnl
-                        autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
-                        autotrade_state['daily_stats']['realized_pnl'] += pnl
-                        autotrade_state['daily_stats']['consecutive_losses'] += 1
-                        
-                        # Cooldown check
-                        if autotrade_state['daily_stats']['consecutive_losses'] >= cfg['consecutive_loss_limit']:
-                            autotrade_state['daily_stats']['cooldown_until'] = now + (cfg['loss_cooldown_minutes'] * 60)
-                            log_audit_event("COOLDOWN_TRIGGERED", sym, pos['ticket'], f"تفعيل فترة تبريد لمدة {cfg['loss_cooldown_minutes']} دقيقة بعد {cfg['consecutive_loss_limit']} خسائر متتالية")
-
-                        pos['status'] = 'CLOSED_SL'
-                        pos['close_price'] = cur_p
-                        pos['close_time'] = time.strftime('%H:%M:%S')
-                        autotrade_state['history'].insert(0, pos)
-                        log_audit_event("POSITION_CLOSED_SL", sym, pos['ticket'], f"ضرب وقف الخسارة عند {cur_p} (خسارة: ${pnl:.2f})")
-                        continue
-
-                    # 2. TP1 Hit Check (Auto Break-Even & 50% Partial Close)
-                    tp1_hit = (cur_p >= pos['tp1']) if is_buy else (cur_p <= pos['tp1'])
-                    if tp1_hit and not pos.get('tp1_hit'):
-                        pos['tp1_hit'] = True
-                        close_vol = round(pos['lot'] * 0.50, 2)
-                        if close_vol >= 0.01:
-                            realized = (pnl * 0.50)
-                            autotrade_state['account']['balance'] += realized
-                            autotrade_state['daily_stats']['realized_pnl'] += realized
-                            pos['lot'] = round(pos['lot'] - close_vol, 2)
-                            log_audit_event("TP1_PARTIAL_CLOSE", sym, pos['ticket'], f"إغلاق جزئي 50% ({close_vol} لوت) وحجز ربح ${realized:.2f}")
-
-                        # Auto Break-Even Buffer
-                        if cfg['auto_breakeven']:
-                            buf = spec['point'] * cfg['breakeven_buffer_pips'] * 10
-                            new_sl = round(pos['entry'] + buf if is_buy else pos['entry'] - buf, 5)
-                            # Never move SL backwards!
-                            if (is_buy and new_sl > pos['sl']) or (not is_buy and new_sl < pos['sl']):
-                                pos['sl'] = new_sl
-                                pos['notes'] = f"تم تأمين الصفقة ونقل الوقف للدخول ({new_sl}) 🛡️"
-                                log_audit_event("AUTO_BREAKEVEN_TRIGGERED", sym, pos['ticket'], f"نقل وقف الخسارة إلى سعر الدخول مع هامش أمان ({new_sl})")
-                                autotrade_command_queue.append({
-                                    'action': 'MODIFY_SL',
-                                    'ticket': pos['ticket'],
-                                    'symbol': sym,
-                                    'new_sl': new_sl,
-                                    'new_tp': pos.get('tp2', pos['tp1'])
-                                })
-
-                    # 3. TP2 Hit Check (30% Partial Close)
-                    if pos.get('tp2') and not pos.get('tp2_hit'):
-                        tp2_hit = (cur_p >= pos['tp2']) if is_buy else (cur_p <= pos['tp2'])
-                        if tp2_hit:
-                            pos['tp2_hit'] = True
-                            close_vol = round(pos['lot'] * 0.60, 2) # 30% of original
-                            if close_vol >= 0.01:
-                                realized = (pnl * 0.60)
-                                autotrade_state['account']['balance'] += realized
-                                autotrade_state['daily_stats']['realized_pnl'] += realized
-                                pos['lot'] = round(pos['lot'] - close_vol, 2)
-                                log_audit_event("TP2_PARTIAL_CLOSE", sym, pos['ticket'], f"إغلاق الهدف الثاني TP2 وحجز ربح ${realized:.2f}")
-
-                    # 4. TP3 Hit Check (Final Target Full Close)
-                    if pos.get('tp3'):
-                        tp3_hit = (cur_p >= pos['tp3']) if is_buy else (cur_p <= pos['tp3'])
-                        if tp3_hit:
-                            autotrade_state['account']['balance'] += pnl
-                            autotrade_state['daily_stats']['realized_pnl'] += pnl
-                            autotrade_state['daily_stats']['consecutive_losses'] = 0
-                            pos['status'] = 'CLOSED_TP3'
-                            pos['close_price'] = cur_p
-                            pos['close_time'] = time.strftime('%H:%M:%S')
-                            autotrade_state['history'].insert(0, pos)
-                            log_audit_event("POSITION_CLOSED_TP3", sym, pos['ticket'], f"تحقيق الهدف النهائي بالكامل TP3 (ربح: ${pnl:.2f})")
-                            continue
-
-                    active_positions.append(pos)
-
-                autotrade_state['open_positions'] = active_positions
-                autotrade_state['daily_stats']['floating_pnl'] = round(total_floating, 2)
-                if autotrade_state['account']['connected']:
-                    autotrade_state['account']['equity'] = round(autotrade_state['account']['balance'] + total_floating, 2)
-                    autotrade_state['account']['free_margin'] = round(max(0, autotrade_state['account']['equity'] - autotrade_state['account']['margin']), 2)
-                    if autotrade_state['account']['margin'] > 0:
-                        autotrade_state['account']['margin_level'] = round((autotrade_state['account']['equity'] / autotrade_state['account']['margin']) * 100, 2)
+            process_position_lifecycle_step()
         except Exception as e:
             print(f"[POSITION LIFECYCLE WORKER ERROR] {e}")
 
 threading.Thread(target=position_lifecycle_worker, daemon=True).start()
 
 # ==========================================================================
-# PRODUCTION REST API ENDPOINTS
+# MODULAR PRIVATE REST API ENDPOINTS (/api/mt5/*)
+# ==========================================================================
+@app.route('/api/mt5/register', methods=['POST'])
+def mt5_post_register():
+    """Registers an active MT5 EA instance with server specifications."""
+    data = request.json or {}
+    auth_secret = request.headers.get('X-MarketPulse-Secret') or data.get('secret', '')
+    if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
+        return jsonify({'status': 'unauthorized', 'message': 'Invalid Secret Key'}), 401
+
+    with autotrade_lock:
+        acc = autotrade_state['account']
+        acc['connected'] = True
+        acc['mt5_connected'] = True
+        acc['ea_connected'] = True
+        acc['broker_connected'] = True
+        acc['bridge_mode'] = 'EA_WEBHOOK_LIVE'
+        acc['server'] = data.get('server', acc['server'])
+        acc['login'] = str(data.get('login', acc['login']))
+        acc['currency'] = data.get('currency', acc['currency'])
+        acc['leverage'] = int(data.get('leverage', acc['leverage']))
+        acc['last_heartbeat'] = time.time()
+        acc['last_sync_time'] = time.strftime('%H:%M:%S')
+
+    log_audit_event("EA_REGISTERED", "SYSTEM", None, f"تم تسجيل إكسبرت MT5 بنجاح ({acc['server']} #{acc['login']})")
+    return jsonify({
+        'status': 'success',
+        'message': f"MT5 EA Registered for {acc['server']} #{acc['login']}",
+        'timestamp': time.time()
+    })
+
+@app.route('/api/mt5/heartbeat', methods=['POST'])
+def mt5_post_heartbeat():
+    """1-Second EA Heartbeat with Latency Tracking."""
+    data = request.json or {}
+    auth_secret = request.headers.get('X-MarketPulse-Secret') or data.get('secret', '')
+    if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
+        return jsonify({'status': 'unauthorized', 'message': 'Invalid Secret Key'}), 401
+
+    now = time.time()
+    client_time = float(data.get('timestamp', now))
+    latency_ms = round(abs(now - client_time) * 1000, 1)
+
+    with autotrade_lock:
+        acc = autotrade_state['account']
+        acc['connected'] = True
+        acc['mt5_connected'] = True
+        acc['ea_connected'] = True
+        acc['broker_connected'] = True
+        acc['last_heartbeat'] = now
+        acc['latency_ms'] = latency_ms
+        acc['last_sync_time'] = time.strftime('%H:%M:%S')
+
+    return jsonify({
+        'status': 'success',
+        'server_time': now,
+        'latency_ms': latency_ms
+    })
+
+@app.route('/api/mt5/account', methods=['POST'])
+def mt5_post_account():
+    """Updates real broker account balance, equity, and margin from MT5."""
+    data = request.json or {}
+    auth_secret = request.headers.get('X-MarketPulse-Secret') or data.get('secret', '')
+    if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
+        return jsonify({'status': 'unauthorized', 'message': 'Invalid Secret Key'}), 401
+
+    now = time.time()
+    with autotrade_lock:
+        acc = autotrade_state['account']
+        acc['connected'] = True
+        acc['last_heartbeat'] = now
+        acc['last_account_sync'] = now
+        acc['last_sync_time'] = time.strftime('%H:%M:%S')
+        if 'balance' in data: acc['balance'] = round(float(data['balance']), 2)
+        if 'equity' in data: acc['equity'] = round(float(data['equity']), 2)
+        if 'margin' in data: acc['margin'] = round(float(data['margin']), 2)
+        if 'free_margin' in data: acc['free_margin'] = round(float(data['free_margin']), 2)
+        if 'margin_level' in data: acc['margin_level'] = round(float(data['margin_level']), 2)
+        if 'server' in data: acc['server'] = str(data['server'])
+        if 'login' in data: acc['login'] = str(data['login'])
+
+    return jsonify({'status': 'success', 'account': autotrade_state['account']})
+
+@app.route('/api/mt5/market', methods=['POST'])
+def mt5_post_market():
+    """Streams live Bid, Ask, and Spreads directly from broker."""
+    data = request.json or {}
+    auth_secret = request.headers.get('X-MarketPulse-Secret') or data.get('secret', '')
+    if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
+        return jsonify({'status': 'unauthorized', 'message': 'Invalid Secret Key'}), 401
+
+    now = time.time()
+    symbol = data.get('symbol', '').upper()
+    bid = float(data.get('bid', 0))
+    ask = float(data.get('ask', 0))
+    spread = float(data.get('spread', 0))
+
+    if symbol and bid > 0:
+        with autotrade_lock:
+            autotrade_state['market_data'][symbol] = {
+                'bid': bid,
+                'ask': ask,
+                'spread': spread,
+                'time': now
+            }
+            autotrade_state['account']['last_market_sync'] = now
+
+    return jsonify({'status': 'success', 'symbol': symbol})
+
+@app.route('/api/mt5/positions', methods=['POST'])
+def mt5_post_positions():
+    """Syncs live open trades directly from MT5 terminal."""
+    data = request.json or {}
+    auth_secret = request.headers.get('X-MarketPulse-Secret') or data.get('secret', '')
+    if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
+        return jsonify({'status': 'unauthorized', 'message': 'Invalid Secret Key'}), 401
+
+    now = time.time()
+    positions = data.get('positions', [])
+
+    with autotrade_lock:
+        acc = autotrade_state['account']
+        acc['connected'] = True
+        acc['last_heartbeat'] = now
+        acc['last_position_sync'] = now
+        if isinstance(positions, list):
+            autotrade_state['open_positions'] = positions
+
+    return jsonify({'status': 'success', 'positions_count': len(positions)})
+
+@app.route('/api/mt5/history', methods=['POST'])
+def mt5_post_history():
+    """Syncs real closed trade history directly from MT5."""
+    data = request.json or {}
+    auth_secret = request.headers.get('X-MarketPulse-Secret') or data.get('secret', '')
+    if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
+        return jsonify({'status': 'unauthorized', 'message': 'Invalid Secret Key'}), 401
+
+    history = data.get('history', [])
+    with autotrade_lock:
+        if isinstance(history, list) and len(history) > 0:
+            autotrade_state['history'] = history[:50]
+
+    return jsonify({'status': 'success', 'history_count': len(history)})
+
+@app.route('/api/mt5/status', methods=['GET'])
+def mt5_get_status():
+    """Returns current MT5 EA link status."""
+    with autotrade_lock:
+        now = time.time()
+        hb = autotrade_state['account']['last_heartbeat']
+        is_fresh = (now - hb) < 10.0 if hb > 0 else False
+        return jsonify({
+            'status': 'success',
+            'connected': is_fresh,
+            'server': autotrade_state['account']['server'],
+            'login': autotrade_state['account']['login'],
+            'last_sync_time': autotrade_state['account']['last_sync_time'],
+            'heartbeat_age_sec': round(now - hb, 1) if hb > 0 else None,
+            'latency_ms': autotrade_state['account']['latency_ms']
+        })
+
+@app.route('/api/mt5/sync', methods=['POST'])
+def mt5_ea_sync():
+    """Consolidated High-Speed Real-Time Bi-Directional Webhook called by MarketPulse_Bridge.mq5 every second."""
+    data = request.json or {}
+    
+    auth_secret = request.headers.get('X-MarketPulse-Secret') or data.get('secret', '')
+    if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
+        return jsonify({'status': 'unauthorized', 'message': 'Invalid Webhook Secret Key'}), 401
+
+    login = str(data.get('login', ''))
+    server_name = str(data.get('server', ''))
+    currency = str(data.get('currency', 'USD'))
+    balance = float(data.get('balance', 0))
+    equity = float(data.get('equity', 0))
+    margin = float(data.get('margin', 0))
+    free_margin = float(data.get('free_margin', 0))
+    positions = data.get('positions', [])
+    now = time.time()
+
+    with autotrade_lock:
+        acc = autotrade_state['account']
+        acc['connected'] = True
+        acc['mt5_connected'] = True
+        acc['ea_connected'] = True
+        acc['broker_connected'] = True
+        acc['bridge_mode'] = 'EA_WEBHOOK_LIVE'
+        acc['last_heartbeat'] = now
+        acc['last_account_sync'] = now
+        acc['last_position_sync'] = now
+        acc['last_sync_time'] = time.strftime('%H:%M:%S')
+        if login: acc['login'] = login
+        if server_name: acc['server'] = server_name
+        if currency: acc['currency'] = currency
+
+        if balance > 0:
+            acc['balance'] = round(balance, 2)
+            acc['equity'] = round(equity if equity > 0 else balance, 2)
+            acc['margin'] = round(margin, 2)
+            acc['free_margin'] = round(free_margin if free_margin > 0 else balance, 2)
+            if acc['margin'] > 0:
+                acc['margin_level'] = round((acc['equity'] / acc['margin']) * 100, 2)
+            else:
+                acc['margin_level'] = 0.0
+
+        # Sync real open positions if reported by MT5 terminal
+        if isinstance(positions, list):
+            autotrade_state['open_positions'] = positions
+
+        # Dispatch pending command queue
+        global autotrade_command_queue
+        commands_to_send = list(autotrade_command_queue)
+        autotrade_command_queue = []
+
+    return jsonify({
+        'status': 'success',
+        'timestamp': now,
+        'commands': commands_to_send
+    })
+
+# ==========================================================================
+# AUTOTRADE REST API ENDPOINTS (/api/autotrade/*)
 # ==========================================================================
 @app.route('/api/autotrade/status', methods=['GET'])
 def autotrade_get_status():
@@ -877,6 +1105,47 @@ def autotrade_get_status():
             'history_count': len(autotrade_state['history'])
         })
 
+@app.route('/api/autotrade/account', methods=['GET'])
+def autotrade_get_account():
+    with autotrade_lock:
+        return jsonify({'status': 'success', 'account': autotrade_state['account']})
+
+@app.route('/api/autotrade/positions', methods=['GET'])
+def autotrade_get_positions():
+    with autotrade_lock:
+        return jsonify({'status': 'success', 'positions': autotrade_state['open_positions']})
+
+@app.route('/api/autotrade/history', methods=['GET'])
+def autotrade_get_history():
+    with autotrade_lock:
+        return jsonify({'status': 'success', 'history': autotrade_state['history'][:30]})
+
+@app.route('/api/autotrade/health', methods=['GET'])
+def autotrade_get_health():
+    """Comprehensive Health Matrix for Backend, REST API, MT5, EA, and Broker."""
+    with autotrade_lock:
+        now = time.time()
+        hb = autotrade_state['account']['last_heartbeat']
+        is_fresh = (now - hb) < 10.0 if hb > 0 else False
+        
+        return jsonify({
+            'status': 'ok' if is_fresh else 'degraded',
+            'backend_status': 'ONLINE',
+            'rest_api_status': 'ONLINE',
+            'mt5_status': 'CONNECTED' if is_fresh else 'DISCONNECTED',
+            'ea_status': 'STREAMING' if is_fresh else 'OFFLINE',
+            'broker_status': 'CONNECTED' if (is_fresh and autotrade_state['account']['balance'] > 0) else 'DISCONNECTED',
+            'server': autotrade_state['account']['server'],
+            'login': autotrade_state['account']['login'],
+            'last_heartbeat': autotrade_state['account']['last_heartbeat'],
+            'last_account_sync': autotrade_state['account']['last_account_sync'],
+            'last_position_sync': autotrade_state['account']['last_position_sync'],
+            'last_market_sync': autotrade_state['account']['last_market_sync'],
+            'heartbeat_age_sec': round(now - hb, 1) if hb > 0 else None,
+            'latency_ms': autotrade_state['account']['latency_ms'],
+            'server_time': time.strftime('%Y-%m-%d %H:%M:%S')
+        })
+
 @app.route('/api/autotrade/connect', methods=['POST'])
 def autotrade_post_connect():
     data = request.json or {}
@@ -892,23 +1161,13 @@ def autotrade_post_connect():
         autotrade_state['emergency_stop'] = False
         autotrade_state['emergency_reason'] = ''
 
-    log_audit_event("ACCOUNT_CREDENTIALS_SET", "SYSTEM", None, f"تم حفظ إعدادات حساب ({server_name} #{login} - وضع {mode.upper()})")
+    log_audit_event("ACCOUNT_CONFIGURED", "SYSTEM", None, f"تم حفظ إعدادات حساب ({server_name} #{login} - وضع {mode.upper()})")
     return jsonify({
         'status': 'success',
         'message': f'تم حفظ وتجهيز إعدادات الاتصال بحساب ({server_name} #{login}) بنجاح 🟢',
         'webhook_secret': EA_WEBHOOK_SECRET,
         'account': autotrade_state['account']
     })
-
-@app.route('/api/autotrade/disconnect', methods=['POST'])
-def autotrade_post_disconnect():
-    with autotrade_lock:
-        autotrade_state['account']['connected'] = False
-        autotrade_state['account']['bridge_mode'] = 'DISCONNECTED'
-        autotrade_state['account']['last_heartbeat'] = 0.0
-        autotrade_state['enabled'] = False
-    log_audit_event("BROKER_DISCONNECTED", "SYSTEM", None, "تم قطع الاتصال بالبروكر يدوياً")
-    return jsonify({'status': 'success', 'message': 'تم قطع الاتصال بالوسيط بنجاح 🔴'})
 
 @app.route('/api/autotrade/toggle', methods=['POST'])
 def autotrade_post_toggle():
@@ -1074,99 +1333,10 @@ def autotrade_post_emergency_stop():
     log_audit_event("EMERGENCY_STOP_TRIGGERED", "SYSTEM", None, reason)
     return jsonify({'status': 'success', 'message': f'🚨 تم تفعيل نظام الطوارئ وإيقاف جميع عمليات التداول: {reason}'})
 
-@app.route('/api/autotrade/positions', methods=['GET'])
-def autotrade_get_positions():
-    with autotrade_lock:
-        return jsonify({'status': 'success', 'positions': autotrade_state['open_positions']})
-
-@app.route('/api/autotrade/history', methods=['GET'])
-def autotrade_get_history():
-    with autotrade_lock:
-        return jsonify({'status': 'success', 'history': autotrade_state['history'][:30]})
-
-@app.route('/api/autotrade/account', methods=['GET'])
-def autotrade_get_account():
-    with autotrade_lock:
-        return jsonify({'status': 'success', 'account': autotrade_state['account']})
-
-@app.route('/api/autotrade/health', methods=['GET'])
-def autotrade_get_health():
-    with autotrade_lock:
-        now = time.time()
-        hb = autotrade_state['account']['last_heartbeat']
-        is_fresh = (now - hb) < 10.0 if hb > 0 else False
-        return jsonify({
-            'status': 'ok' if is_fresh else 'degraded',
-            'broker_connected': autotrade_state['account']['connected'],
-            'heartbeat_fresh': is_fresh,
-            'heartbeat_age_sec': round(now - hb, 1) if hb > 0 else None,
-            'latency_ms': autotrade_state['account']['latency_ms'],
-            'server_time': time.strftime('%Y-%m-%d %H:%M:%S')
-        })
-
 @app.route('/api/autotrade/audit-logs', methods=['GET'])
 def autotrade_get_audit_logs():
     with autotrade_lock:
         return jsonify({'status': 'success', 'logs': audit_logs[:50]})
-
-# ==========================================================================
-# AUTHENTICATED EA WEBHOOK DIRECT BRIDGE (/api/mt5/sync)
-# ==========================================================================
-@app.route('/api/mt5/sync', methods=['POST'])
-def mt5_ea_sync():
-    """Protected Bi-Directional Real-Time Webhook called by MarketPulse_Bridge.mq5 every second."""
-    data = request.json or {}
-    
-    # 1. Header or payload secret authentication check
-    auth_secret = request.headers.get('X-MarketPulse-Secret') or data.get('secret', '')
-    if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
-        return jsonify({'status': 'unauthorized', 'message': 'Invalid Webhook Secret Key'}), 401
-
-    login = str(data.get('login', ''))
-    server_name = str(data.get('server', ''))
-    currency = str(data.get('currency', 'USD'))
-    balance = float(data.get('balance', 0))
-    equity = float(data.get('equity', 0))
-    margin = float(data.get('margin', 0))
-    free_margin = float(data.get('free_margin', 0))
-    positions = data.get('positions', [])
-    now = time.time()
-
-    with autotrade_lock:
-        acc = autotrade_state['account']
-        acc['connected'] = True
-        acc['bridge_mode'] = 'EA_WEBHOOK_LIVE'
-        acc['last_heartbeat'] = now
-        acc['last_sync_time'] = time.strftime('%H:%M:%S')
-        if login: acc['login'] = login
-        if server_name: acc['server'] = server_name
-        if currency: acc['currency'] = currency
-
-        if balance > 0:
-            acc['balance'] = round(balance, 2)
-            acc['equity'] = round(equity if equity > 0 else balance, 2)
-            acc['margin'] = round(margin, 2)
-            acc['free_margin'] = round(free_margin if free_margin > 0 else balance, 2)
-            if acc['margin'] > 0:
-                acc['margin_level'] = round((acc['equity'] / acc['margin']) * 100, 2)
-            else:
-                acc['margin_level'] = 0.0
-
-        # Sync real open positions if reported by MT5 terminal
-        if isinstance(positions, list):
-            # Update current_price and pnl from EA
-            autotrade_state['open_positions'] = positions
-
-        # Dispatch pending command queue
-        global autotrade_command_queue
-        commands_to_send = list(autotrade_command_queue)
-        autotrade_command_queue = []
-
-    return jsonify({
-        'status': 'success',
-        'timestamp': now,
-        'commands': commands_to_send
-    })
 
 @app.route('/api/mt5/download-ea', methods=['GET'])
 def mt5_download_ea():
@@ -1185,5 +1355,5 @@ def mt5_download_ea():
 
 
 if __name__ == '__main__':
-    print("MarketPulse FX Institutional Server running on http://0.0.0.0:2200")
+    print("MarketPulse FX Private REST Server running on http://0.0.0.0:2200")
     app.run(host='0.0.0.0', port=2200, debug=False)
