@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
     <!-- Stylesheet -->
-    <link rel="stylesheet" href="style.css?v=3">
+    <link rel="stylesheet" href="style.css?v=4">
     <!-- TradingView Core Script -->
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 </head>
@@ -1228,7 +1228,7 @@
                 </div>
 
                 <!-- Tab 1: Risk Management & Lot Sizing -->
-                <div class="at-tab-content active" id="attab-risk">
+                <div class="at-tab-content" id="attab-risk" style="display: none;">
                     <div class="card" style="background: rgba(15,22,35,0.5); border: 1px solid rgba(255,215,0,0.2); padding: 1.25rem; border-radius: 10px;">
                         <h4 style="color: var(--gold); font-size: 1rem; margin-bottom: 1rem;"><i class="fa-solid fa-sliders"></i> القواعد الصارمة لإدارة رأس المال (Risk Control):</h4>
                         
@@ -1290,7 +1290,7 @@
                 </div>
 
                 <!-- Tab 2: Live Open Positions -->
-                <div class="at-tab-content" id="attab-positions" style="display: none;">
+                <div class="at-tab-content active" id="attab-positions" style="display: block;">
                     <div class="card" style="background: rgba(15,22,35,0.5); border: 1px solid rgba(255,215,0,0.2); padding: 1rem; border-radius: 10px;">
                         <div class="table-responsive">
                             <table class="custom-table" style="width:100%; text-align:center; font-size:0.85rem;">
@@ -1479,7 +1479,7 @@
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 
     <!-- Main JavaScript App Logic -->
-    <script src="app.js?v=28"></script>
+    <script src="app.js?v=29"></script>
 
     <!-- AI Assistant Floating Widget -->
     <div id="ai-assistant-widget" class="ai-widget-container">
