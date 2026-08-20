@@ -1181,7 +1181,13 @@
                         <span style="font-size: 0.8rem; color: var(--text-secondary);">ربط الحساب • إدارة المخاطر • تنفيذ فوري على MT4 / MT5</span>
                     </div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                    <button class="btn btn-outline btn-sm" id="at-pause-btn" style="border-color: #ff9800; color: #ff9800; padding: 0.35rem 0.75rem; font-size: 0.78rem;" title="إيقاف الصفقات الجديدة مع إبقاء الصفقات المفتوحة">
+                        <i class="fa-solid fa-pause"></i> إيقاف الصفقات الجديدة
+                    </button>
+                    <button class="btn btn-danger btn-sm" id="at-emergency-btn" style="background: #d32f2f; border-color: #d32f2f; color: #fff; padding: 0.35rem 0.75rem; font-size: 0.78rem;" title="إغلاق شامل وإيقاف طارئ فوري">
+                        <i class="fa-solid fa-triangle-exclamation"></i> إغلاق شامل + طوارئ
+                    </button>
                     <label class="switch" style="margin:0;">
                         <input type="checkbox" id="autotrade-master-toggle">
                         <span class="slider round"></span>
@@ -1214,10 +1220,11 @@
 
                 <!-- Navigation Tabs -->
                 <div class="admin-tabs" style="display: flex; gap: 0.5rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
-                    <button class="admin-tab-btn active" data-attab="risk"><i class="fa-solid fa-shield-halved"></i> 1. إدارة المخاطر وسقف اللوت</button>
-                    <button class="admin-tab-btn" data-attab="positions"><i class="fa-solid fa-bolt text-gold"></i> 2. الصفقات المفتوحة (<span id="at-open-count">0</span>)</button>
-                    <button class="admin-tab-btn" data-attab="connect"><i class="fa-solid fa-plug"></i> 3. ربط حساب الميتاتريدر (MT5)</button>
-                    <button class="admin-tab-btn" data-attab="history"><i class="fa-solid fa-clock-rotate-left"></i> 4. سجل الصفقات المغلقة</button>
+                    <button class="admin-tab-btn active" data-attab="positions"><i class="fa-solid fa-bolt text-gold"></i> 1. الصفقات الحية (<span id="at-open-count">0</span>)</button>
+                    <button class="admin-tab-btn" data-attab="risk"><i class="fa-solid fa-shield-halved"></i> 2. إدارة المخاطر واللوت</button>
+                    <button class="admin-tab-btn" data-attab="connect"><i class="fa-solid fa-plug"></i> 3. ربط MT5 والجسر</button>
+                    <button class="admin-tab-btn" data-attab="audit"><i class="fa-solid fa-list-check text-info"></i> 4. سجل التدقيق والمطابقة</button>
+                    <button class="admin-tab-btn" data-attab="history"><i class="fa-solid fa-clock-rotate-left"></i> 5. الأرشيف المغلق</button>
                 </div>
 
                 <!-- Tab 1: Risk Management & Lot Sizing -->
@@ -1392,7 +1399,34 @@
                     </div>
                 </div>
 
-                <!-- Tab 4: Trade History -->
+                
+                <!-- Tab 4: Audit Logs & Reconciliation -->
+                <div class="at-tab-content" id="attab-audit" style="display: none;">
+                    <div class="card" style="background: rgba(15,22,35,0.5); border: 1px solid var(--border-color); padding: 1rem; border-radius: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                            <h4 style="color: var(--info); font-size: 0.95rem; margin: 0;"><i class="fa-solid fa-list-check"></i> سجل القرارات والمطابقة الحية (Reconciliation & Audit Logs):</h4>
+                            <span class="badge badge-live">محدث تلقائياً</span>
+                        </div>
+                        <div class="table-responsive" style="max-height: 380px; overflow-y: auto;">
+                            <table class="custom-table" style="width:100%; text-align:center; font-size:0.8rem;">
+                                <thead>
+                                    <tr>
+                                        <th>الوقت</th>
+                                        <th>الحدث</th>
+                                        <th>الأصل</th>
+                                        <th>التذكرة</th>
+                                        <th>التفاصيل والسبب</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="at-audit-tbody">
+                                    <tr><td colspan="5" style="padding: 2rem; color: var(--text-secondary);">جاري تحميل سجل التدقيق...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 5: Trade History -->
                 <div class="at-tab-content" id="attab-history" style="display: none;">
                     <div class="card" style="background: rgba(15,22,35,0.5); border: 1px solid var(--border-color); padding: 1rem; border-radius: 10px;">
                         <div class="table-responsive">
@@ -1445,7 +1479,7 @@
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 
     <!-- Main JavaScript App Logic -->
-    <script src="app.js?v=26"></script>
+    <script src="app.js?v=28"></script>
 
     <!-- AI Assistant Floating Widget -->
     <div id="ai-assistant-widget" class="ai-widget-container">
