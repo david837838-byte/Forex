@@ -2765,14 +2765,44 @@ Evaluate objectively. Return ONLY valid JSON:
     // ============================================================
     // AUTO-TRADING & BROKER BRIDGE CLIENT CONTROLLER
     // ============================================================
+
+    // ============================================================
+    // INSTITUTIONAL AUTOMATED TRADING CONTROLLER & MT5 SYNC CLIENT
+    // ============================================================
     const AutoTrade = {
         state: {
             enabled: false,
             mode: 'demo',
-            account: { balance: 40000, equity: 40000, free_margin: 40000 },
-            risk_config: { risk_percent: 1.0, max_lot_cap: 0.5, max_open_trades: 3, min_score: 75, auto_breakeven: true, partial_tp1_close: true },
+            emergency_stop: false,
+            emergency_reason: '',
+            is_heartbeat_fresh: false,
+            account: {
+                connected: false,
+                bridge_mode: 'DISCONNECTED',
+                server: 'JustMarkets-Demo',
+                login: '',
+                balance: 0.0,
+                equity: 0.0,
+                margin: 0.0,
+                free_margin: 0.0,
+                margin_level: 0.0,
+                currency: 'USD',
+                last_sync_time: ''
+            },
+            risk_config: {
+                risk_percent: 1.0,
+                max_lot_cap: 0.50,
+                max_open_trades: 3,
+                max_daily_trades: 10,
+                max_daily_loss_pct: 3.0,
+                min_score: 75,
+                auto_breakeven: true,
+                trailing_stop_enabled: false
+            },
+            daily_stats: {},
             open_positions: [],
-            history: []
+            history: [],
+            audit_logs: []
         },
 
         getApiHost() {
@@ -2781,77 +2811,154 @@ Evaluate objectively. Return ONLY valid JSON:
 
         async syncStatus() {
             try {
-                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/status`, { cache: 'no-cache' });
-                if (!res.ok) return;
-                const data = await res.json();
-                if (data.status === 'success') {
-                    this.state = data;
-                    this.renderUI();
+                const [statusRes, posRes, logsRes] = await Promise.all([
+                    fetch(`http://${this.getApiHost()}:2200/api/autotrade/status`),
+                    fetch(`http://${this.getApiHost()}:2200/api/autotrade/positions`),
+                    fetch(`http://${this.getApiHost()}:2200/api/autotrade/audit-logs`)
+                ]);
+
+                if (statusRes.ok) {
+                    const data = await statusRes.json();
+                    if (data.status === 'success') {
+                        this.state.enabled = data.enabled;
+                        this.state.mode = data.mode;
+                        this.state.emergency_stop = data.emergency_stop;
+                        this.state.emergency_reason = data.emergency_reason;
+                        this.state.is_heartbeat_fresh = data.is_heartbeat_fresh;
+                        this.state.account = data.account || this.state.account;
+                        this.state.risk_config = data.risk_config || this.state.risk_config;
+                        this.state.daily_stats = data.daily_stats || this.state.daily_stats;
+                    }
                 }
+
+                if (posRes.ok) {
+                    const posData = await posRes.json();
+                    if (posData.status === 'success') {
+                        this.state.open_positions = posData.positions || [];
+                    }
+                }
+
+                if (logsRes.ok) {
+                    const logsData = await logsRes.json();
+                    if (logsData.status === 'success') {
+                        this.state.audit_logs = logsData.logs || [];
+                    }
+                }
+
+                this.renderUI();
             } catch (e) {
-                // Silently fallback if server is busy
+                // Server offline or network error
+                this.state.account.connected = false;
+                this.renderUI();
             }
         },
 
         renderUI() {
-            // Update Header Button & Master Toggle
-            const statusText = document.getElementById('autotrade-status-text');
-            const masterToggle = document.getElementById('autotrade-master-toggle');
-            const masterStatus = document.getElementById('autotrade-master-status');
+            const acc = this.state.account || {};
+            const isConnected = acc.connected && this.state.is_heartbeat_fresh;
+            const isEnabled = this.state.enabled && !this.state.emergency_stop;
+
+            // 1. Connection Status Badges
+            const brokerStatusText = document.getElementById('at-broker-status-text');
+            const brokerIcon = document.getElementById('at-broker-icon');
+            if (brokerStatusText) {
+                if (isConnected) {
+                    brokerStatusText.innerHTML = `<span style="color: var(--success);">متصل بالبروكر (${acc.server || 'JustMarkets'}) 🟢</span>`;
+                    if (brokerIcon) brokerIcon.className = "fa-solid fa-server text-success";
+                } else {
+                    brokerStatusText.innerHTML = `<span style="color: #ff5252;">غير متصل بالوسيط (BROKER DISCONNECTED) 🔴</span>`;
+                    if (brokerIcon) brokerIcon.className = "fa-solid fa-server text-danger";
+                }
+            }
+
+            const eaStatusText = document.getElementById('at-ea-status-text');
+            const eaIcon = document.getElementById('at-ea-icon');
+            if (eaStatusText) {
+                if (isConnected && acc.last_sync_time) {
+                    eaStatusText.innerHTML = `<span style="color: var(--success);">نبض حي (${acc.last_sync_time}) 🟢</span>`;
+                    if (eaIcon) eaIcon.className = "fa-solid fa-satellite-dish text-success fa-beat";
+                } else {
+                    eaStatusText.innerHTML = `<span style="color: var(--text-secondary);">الإكسبرت غير نشط (Offline)</span>`;
+                    if (eaIcon) eaIcon.className = "fa-solid fa-satellite-dish text-secondary";
+                }
+            }
+
+            const engineStatusText = document.getElementById('at-engine-status-text');
+            const toggleBtn = document.getElementById('at-toggle-engine-btn');
             const panelBtn = document.getElementById('autotrade-panel-btn');
 
-            if (masterToggle) masterToggle.checked = this.state.enabled;
+            if (engineStatusText) {
+                if (this.state.emergency_stop) {
+                    engineStatusText.innerHTML = `<span style="color: #ff1744; font-weight: bold;">🚨 طوارئ: ${this.state.emergency_reason || 'متوقف'}</span>`;
+                    if (toggleBtn) { toggleBtn.textContent = 'إعادة تفعيل'; toggleBtn.className = 'btn btn-outline btn-sm'; }
+                } else if (isEnabled) {
+                    engineStatusText.innerHTML = `<span style="color: var(--success); font-weight: bold;">نشط ويراقب الصفقات 🟢</span>`;
+                    if (toggleBtn) { toggleBtn.textContent = 'إيقاف التداول ⏸️'; toggleBtn.className = 'btn btn-danger btn-sm'; }
+                    if (panelBtn) panelBtn.style.boxShadow = '0 0 20px rgba(0,230,118,0.5)';
+                } else {
+                    engineStatusText.innerHTML = `<span style="color: var(--text-secondary);">متوقف مؤقتاً ⏸️</span>`;
+                    if (toggleBtn) { toggleBtn.textContent = 'تفعيل التداول 🟢'; toggleBtn.className = 'btn btn-success btn-sm'; }
+                    if (panelBtn) panelBtn.style.boxShadow = '0 0 15px rgba(255,215,0,0.25)';
+                }
+            }
 
-            if (this.state.enabled) {
-                if (statusText) statusText.innerHTML = `التداول الآلي: <strong class="text-success">نشط 🟢</strong>`;
-                if (masterStatus) { masterStatus.className = 'badge badge-live'; masterStatus.innerHTML = 'نشط 🟢 (يراقب ويفتح الصفقات)'; }
-                if (panelBtn) panelBtn.style.boxShadow = '0 0 20px rgba(0,230,118,0.45)';
+            const modeBadge = document.getElementById('at-mode-badge');
+            if (modeBadge) {
+                if (this.state.mode === 'live') {
+                    modeBadge.className = 'badge badge-danger';
+                    modeBadge.innerHTML = '⚠️ تداول حقيقي (LIVE REAL)';
+                } else {
+                    modeBadge.className = 'badge badge-gold';
+                    modeBadge.innerHTML = '🧪 حساب تجريبي (DEMO)';
+                }
+            }
+
+            // 2. Real KPI Cards (NO FAKE NUMBERS)
+            const kpiBal = document.getElementById('at-kpi-balance');
+            const kpiEq = document.getElementById('at-kpi-equity');
+            const kpiFree = document.getElementById('at-kpi-freemargin');
+            const kpiFloat = document.getElementById('at-kpi-floating');
+            const kpiOpenCount = document.getElementById('at-kpi-open-count');
+            const tabBadgePos = document.getElementById('at-tab-badge-pos');
+            const kpiServerLabel = document.getElementById('at-kpi-server-label');
+            const kpiMarginLevel = document.getElementById('at-kpi-margin-level');
+            const kpiUsedMargin = document.getElementById('at-kpi-usedmargin');
+
+            if (isConnected && acc.balance > 0) {
+                if (kpiBal) kpiBal.textContent = `$${acc.balance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                if (kpiEq) kpiEq.textContent = `$${acc.equity.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                if (kpiFree) kpiFree.textContent = `$${acc.free_margin.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                if (kpiServerLabel) kpiServerLabel.textContent = `${acc.server || 'JustMarkets'} #${acc.login || ''}`;
+                if (kpiMarginLevel) kpiMarginLevel.textContent = `مستوى الهامش: ${acc.margin_level ? acc.margin_level + '%' : '100%'}`;
+                if (kpiUsedMargin) kpiUsedMargin.textContent = `المحجوز: $${(acc.margin || 0).toFixed(2)}`;
             } else {
-                if (statusText) statusText.innerHTML = `التداول الآلي (Auto-Trade)`;
-                if (masterStatus) { masterStatus.className = 'badge badge-warning'; masterStatus.innerHTML = 'متوقف 🔴'; }
-                if (panelBtn) panelBtn.style.boxShadow = '0 0 15px rgba(255,215,0,0.25)';
+                if (kpiBal) kpiBal.textContent = '—';
+                if (kpiEq) kpiEq.textContent = '—';
+                if (kpiFree) kpiFree.textContent = '—';
+                if (kpiServerLabel) kpiServerLabel.textContent = 'بانتظار ربط الحساب';
+                if (kpiMarginLevel) kpiMarginLevel.textContent = 'مستوى الهامش: —';
+                if (kpiUsedMargin) kpiUsedMargin.textContent = 'المحجوز: —';
             }
 
-            // Update Account Metrics
-            const acc = this.state.account || {};
-            const balEl = document.getElementById('at-balance-val');
-            const eqEl = document.getElementById('at-equity-val');
-            const marEl = document.getElementById('at-margin-val');
-            const pnlEl = document.getElementById('at-floating-pnl-val');
-            const countEl = document.getElementById('at-open-count');
+            const openPositions = this.state.open_positions || [];
+            let totalFloatingPnL = 0;
+            openPositions.forEach(p => { totalFloatingPnL += (p.pnl || 0); });
 
-            if (balEl) balEl.textContent = `$${(acc.balance || 40000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
-            if (eqEl) eqEl.textContent = `$${(acc.equity || 40000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
-            if (marEl) marEl.textContent = `$${(acc.free_margin || 40000).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
-
-            const syncBadge = document.getElementById('at-last-sync-badge');
-            const bridgeText = document.getElementById('at-bridge-status-text');
-            if (syncBadge && acc.last_sync_time) {
-                syncBadge.textContent = `مزامنة حية من البروكر: ${acc.last_sync_time}`;
+            if (kpiFloat) {
+                const s = totalFloatingPnL >= 0 ? '+' : '';
+                kpiFloat.textContent = `${s}$${totalFloatingPnL.toFixed(2)}`;
+                kpiFloat.style.color = totalFloatingPnL >= 0 ? 'var(--success)' : 'var(--danger)';
             }
-            if (bridgeText && acc.bridge_mode === 'EA_WEBHOOK_LIVE') {
-                bridgeText.innerHTML = `مربوط بالبروكر عبر الإكسبرت (مباشر 🟢)`;
-            }
+            if (kpiOpenCount) kpiOpenCount.textContent = `${openPositions.length} صفقات نشطة`;
+            if (tabBadgePos) tabBadgePos.textContent = openPositions.length;
 
-            const openPos = this.state.open_positions || [];
-            if (countEl) countEl.textContent = openPos.length;
-
-            let totalFloating = 0;
-            openPos.forEach(p => { totalFloating += (p.pnl || 0); });
-
-            if (pnlEl) {
-                const s = totalFloating >= 0 ? '+' : '';
-                pnlEl.textContent = `${s}$${totalFloating.toFixed(2)}`;
-                pnlEl.style.color = totalFloating >= 0 ? 'var(--success)' : 'var(--danger)';
-            }
-
-            // Render Open Positions Table
+            // 3. Render Live Open Positions Table
             const posTbody = document.getElementById('at-positions-tbody');
             if (posTbody) {
-                if (openPos.length === 0) {
-                    posTbody.innerHTML = `<tr><td colspan="10" style="padding: 2.5rem 1rem; color: var(--text-secondary);"><i class="fa-solid fa-radar fa-beat" style="color:var(--gold); font-size:1.5rem; display:block; margin-bottom:0.5rem;"></i>لا توجد صفقات مفتوحة حالياً. عند توليد فرصة تستوفي شروطك (النقاط >= ${this.state.risk_config.min_score || 75}) سيتم فتحها هنا آلياً.</td></tr>`;
+                if (openPositions.length === 0) {
+                    posTbody.innerHTML = `<tr><td colspan="10" style="padding: 2.5rem 1rem; color: var(--text-secondary);"><i class="fa-solid fa-radar fa-beat" style="color:var(--gold); font-size:1.5rem; display:block; margin-bottom:0.5rem;"></i>لا توجد صفقات مفتوحة حالياً. عند توليد فرصة تستوفي شروط المحرك سيتم فتحها هنا آلياً.</td></tr>`;
                 } else {
-                    posTbody.innerHTML = openPos.map(p => {
+                    posTbody.innerHTML = openPositions.map(p => {
                         const isBuy = p.type === 'BUY';
                         const pClass = (p.pnl || 0) >= 0 ? 'text-success' : 'text-danger';
                         const s = (p.pnl || 0) >= 0 ? '+' : '';
@@ -2865,98 +2972,65 @@ Evaluate objectively. Return ONLY valid JSON:
                             <td class="text-danger">${p.sl}</td>
                             <td class="text-success">${p.tp1}</td>
                             <td><strong class="${pClass}">${s}$${(p.pnl || 0).toFixed(2)}</strong></td>
-                            <td><button class="btn btn-sm btn-outline at-close-btn" data-ticket="${p.ticket}" style="border-color:var(--danger); color:var(--danger); padding:0.25rem 0.6rem;"><i class="fa-solid fa-xmark"></i> إغلاق</button></td>
+                            <td><button class="btn btn-sm btn-outline at-close-single-btn" data-ticket="${p.ticket}" style="border-color:var(--danger); color:var(--danger); padding:0.25rem 0.6rem;"><i class="fa-solid fa-xmark"></i> إغلاق</button></td>
                         </tr>`;
                     }).join('');
 
-                    // Connect Close Buttons
-                    posTbody.querySelectorAll('.at-close-btn').forEach(btn => {
-                        btn.addEventListener('click', async (e) => {
-                            const ticket = e.currentTarget.getAttribute('data-ticket');
-                            await AutoTrade.closePosition(ticket);
+                    posTbody.querySelectorAll('.at-close-single-btn').forEach(btn => {
+                        btn.addEventListener('click', (e) => {
+                            const t = e.currentTarget.getAttribute('data-ticket');
+                            AutoTrade.closePosition(t);
                         });
                     });
                 }
             }
 
-            // Render History Table
-            const histTbody = document.getElementById('at-history-tbody');
-            const history = this.state.history || [];
-            if (histTbody && history.length > 0) {
-                histTbody.innerHTML = history.map(h => {
-                    const isProfit = (h.pnl || 0) >= 0;
-                    const pClass = isProfit ? 'text-success' : 'text-danger';
-                    const s = isProfit ? '+' : '';
-                    return `<tr>
-                        <td style="font-family:monospace;">#${h.ticket}</td>
-                        <td><strong>${h.symbol}</strong></td>
-                        <td><span class="badge ${h.type === 'BUY' ? 'badge-buy' : 'badge-sell'}">${h.type}</span></td>
-                        <td>${h.lot}</td>
-                        <td>${h.entry}</td>
-                        <td>${h.close_price || '—'}</td>
-                        <td><span class="badge ${isProfit ? 'badge-gold' : 'badge-warning'}">${h.status}</span></td>
-                        <td><strong class="${pClass}">${s}$${(h.pnl || 0).toFixed(2)}</strong></td>
-                        <td>${h.close_time || 'الآن'}</td>
-                    </tr>`;
-                }).join('');
+            // 4. Render Live Audit Logs Table
+            const auditTbody = document.getElementById('at-audit-tbody');
+            const logs = this.state.audit_logs || [];
+            if (auditTbody) {
+                if (logs.length === 0) {
+                    auditTbody.innerHTML = `<tr><td colspan="5" style="padding: 1.5rem; color: var(--text-secondary);">لا توجد أحداث مسجلة بعد.</td></tr>`;
+                } else {
+                    auditTbody.innerHTML = logs.map(l => {
+                        const isApproved = l.event.includes('APPROVED') || l.event.includes('PROFIT') || l.event.includes('TP');
+                        const isRejected = l.event.includes('REJECTED') || l.event.includes('KILL') || l.event.includes('TIMEOUT');
+                        const badgeColor = isApproved ? 'badge-live' : (isRejected ? 'badge-warning' : 'badge-gold');
+                        return `<tr>
+                            <td style="font-family:monospace; font-size:0.78rem;">${l.time}</td>
+                            <td><span class="badge ${badgeColor}" style="font-size:0.75rem;">${l.event}</span></td>
+                            <td><strong>${l.symbol}</strong></td>
+                            <td style="font-family:monospace; font-size:0.78rem;">${l.ticket || '—'}</td>
+                            <td style="text-align:right; font-size:0.8rem; color:var(--text-primary);">${l.reason}</td>
+                        </tr>`;
+                    }).join('');
+                }
             }
         },
 
-        async toggleMaster(forceVal = null) {
+        async toggleEngine() {
             try {
-                const payload = forceVal !== null ? { enabled: forceVal } : {};
                 const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/toggle`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({})
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    this.state.enabled = data.enabled;
-                    this.renderUI();
-                }
-            } catch (e) {
-                console.warn('AutoTrade toggle error:', e);
-            }
-        },
-
-        async saveConfig() {
-            try {
-                const risk_percent = parseFloat(document.getElementById('at-risk-percent')?.value || 1.0);
-                const max_lot_cap = parseFloat(document.getElementById('at-max-lot')?.value || 0.5);
-                const max_open_trades = parseInt(document.getElementById('at-max-open')?.value || 3);
-                const min_score = parseInt(document.getElementById('at-min-score')?.value || 75);
-                const auto_breakeven = document.getElementById('at-auto-be')?.checked ?? true;
-                const partial_tp1_close = document.getElementById('at-partial-tp1')?.checked ?? true;
-
-                
-                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/config`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ risk_percent, max_lot_cap, max_open_trades, min_score, auto_breakeven, partial_tp1_close })
-                });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    alert('✅ تم حفظ قواعد إدارة المخاطر وتطبيقها على الصفقات الآلية فوراً!');
                     this.syncStatus();
                 }
             } catch (e) {
-                alert('فشل حفظ الإعدادات');
+                alert('فشل تفعيل/إيقاف التداول الآلي');
             }
         },
 
-        async connectAccount() {
+        async triggerEmergencyStop() {
+            if (!confirm('🚨 هل أنت متأكد من تفعيل زر الطوارئ (Kill Switch) وإيقاف جميع عمليات التداول فوراً؟')) return;
             try {
-                const server = document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
-                const login = document.getElementById('at-login-num')?.value.trim() || '10982341';
-                const password = document.getElementById('at-password')?.value || '';
-                const mode = document.getElementById('at-trading-mode')?.value || 'demo';
-                
-
-                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/connect`, {
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/emergency-stop`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ server, login, password, mode })
+                    body: JSON.stringify({ reason: 'تفعيل يدوي من قبل المتداول في لوحة التحكم' })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
@@ -2964,34 +3038,25 @@ Evaluate objectively. Return ONLY valid JSON:
                     this.syncStatus();
                 }
             } catch (e) {
-                alert('فشل الاتصال بسيرفر الميتاتريدر');
+                alert('فشل إرسال أمر الطوارئ');
             }
         },
 
-        async executeSignal(signal) {
-            if (!this.state.enabled) return;
+        async closeAll() {
+            if (!confirm('🔒 هل أنت متأكد من إغلاق جميع الصفقات المفتوحة حالياً في منصة MT5؟')) return;
             try {
-                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/execute`, {
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/close-all`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        symbol: signal.symbol,
-                        type: signal.type,
-                        entry: signal.entry,
-                        sl: signal.sl,
-                        tp1: signal.tp1,
-                        tp2: signal.tp2,
-                        tp3: signal.tp3,
-                        score: signal.score || 80
-                    })
+                    body: JSON.stringify({})
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    console.log(`[AUTOTRADE DISPATCHED] ${signal.symbol} ${signal.type}: ${data.message}`);
+                    alert(data.message);
                     this.syncStatus();
                 }
             } catch (e) {
-                console.warn('AutoTrade execute error:', e);
+                alert('فشل إغلاق الصفقات');
             }
         },
 
@@ -3007,59 +3072,144 @@ Evaluate objectively. Return ONLY valid JSON:
                     this.syncStatus();
                 }
             } catch (e) {
-                console.warn('Close position error:', e);
+                alert('فشل إغلاق الصفقة');
+            }
+        },
+
+        async saveConfig() {
+            try {
+                const risk_percent = parseFloat(document.getElementById('at-risk-percent')?.value || 1.0);
+                const max_lot_cap = parseFloat(document.getElementById('at-max-lot')?.value || 0.50);
+                const max_open_trades = parseInt(document.getElementById('at-max-open')?.value || 3);
+                const max_daily_loss_pct = parseFloat(document.getElementById('at-daily-loss')?.value || 3.0);
+                const min_score = parseInt(document.getElementById('at-min-score')?.value || 75);
+                const auto_breakeven = document.getElementById('at-auto-breakeven')?.checked ?? true;
+                const trailing_stop_enabled = document.getElementById('at-trailing-stop')?.checked ?? false;
+
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        risk_percent, max_lot_cap, max_open_trades, max_daily_loss_pct, min_score, auto_breakeven, trailing_stop_enabled
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert('✅ تم حفظ قواعد إدارة المخاطر وتطبيقها على المحرك فوراً!');
+                    this.syncStatus();
+                }
+            } catch (e) {
+                alert('فشل حفظ الإعدادات');
+            }
+        },
+
+        async connectAccount() {
+            try {
+                const server = document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
+                const login = document.getElementById('at-login-num')?.value.trim() || '';
+                const password = document.getElementById('at-password')?.value || '';
+                const mode = document.getElementById('at-trading-mode')?.value || 'demo';
+
+                if (mode === 'live') {
+                    if (!confirm('⚠️ تحذير أمني: أنت على وشك تفعيل التداول على حساب حقيقي (LIVE). تأكد من ضبط قواعد إدارة المخاطر وسقف اللوت قبل المتابعة. هل تريد المتابعة؟')) return;
+                }
+
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/connect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server, login, password, mode })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert(data.message);
+                    this.syncStatus();
+                }
+            } catch (e) {
+                alert('فشل حفظ إعدادات الاتصال');
+            }
+        },
+
+        async executeSignal(signal) {
+            if (!this.state.enabled || this.state.emergency_stop) return;
+            try {
+                const res = await fetch(`http://${this.getApiHost()}:2200/api/autotrade/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        symbol: signal.symbol,
+                        type: signal.type,
+                        entry: signal.entry,
+                        sl: signal.sl,
+                        tp1: signal.tp1,
+                        tp2: signal.tp2 || 0,
+                        tp3: signal.tp3 || 0,
+                        score: signal.score || 80,
+                        signal_id: signal.id || `${signal.symbol}_${signal.type}_${Date.now()}`
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    console.log(`[AUTOTRADE ORDER DISPATCHED] ${signal.symbol} ${signal.type}:`, data.message);
+                    this.syncStatus();
+                } else {
+                    console.log(`[AUTOTRADE RISK REJECTED] ${signal.symbol}:`, data.message);
+                }
+            } catch (e) {
+                console.warn('AutoTrade execute error:', e);
             }
         }
     };
 
-
     // ============================================================
-    // AUTOTRADE MODAL & UI CONTROLLERS
+    // AUTOTRADE MODAL UI EVENT LISTENERS
     // ============================================================
     const atModal = document.getElementById('autotrade-modal');
     const atPanelBtn = document.getElementById('autotrade-panel-btn');
-    const atModalClose = document.getElementById('autotrade-modal-close-btn');
+    const closeAtModalBtn = document.getElementById('close-autotrade-modal');
     const atModalOverlay = document.getElementById('autotrade-modal-overlay');
-    const atMasterToggle = document.getElementById('autotrade-master-toggle');
+    const atToggleBtn = document.getElementById('at-toggle-engine-btn');
+    const atEmergencyBtn = document.getElementById('at-emergency-stop-btn');
+    const atCloseAllBtn = document.getElementById('at-close-all-btn');
     const atSaveConfigBtn = document.getElementById('save-at-config-btn');
     const atSaveConnectBtn = document.getElementById('save-at-connect-btn');
+    const refreshAuditBtn = document.getElementById('refresh-audit-btn');
 
     if (atPanelBtn && atModal) {
         atPanelBtn.addEventListener('click', () => {
-            atModal.classList.add('active');
+            atModal.style.display = 'flex';
             AutoTrade.syncStatus();
         });
     }
-    if (atModalClose) atModalClose.addEventListener('click', () => atModal.classList.remove('active'));
-    if (atModalOverlay) atModalOverlay.addEventListener('click', () => atModal.classList.remove('active'));
 
-    if (atMasterToggle) {
-        atMasterToggle.addEventListener('change', (e) => {
-            AutoTrade.toggleMaster(e.target.checked);
-        });
+    if (closeAtModalBtn && atModal) {
+        closeAtModalBtn.addEventListener('click', () => { atModal.style.display = 'none'; });
+    }
+    if (atModalOverlay && atModal) {
+        atModalOverlay.addEventListener('click', () => { atModal.style.display = 'none'; });
     }
 
+    if (atToggleBtn) atToggleBtn.addEventListener('click', () => AutoTrade.toggleEngine());
+    if (atEmergencyBtn) atEmergencyBtn.addEventListener('click', () => AutoTrade.triggerEmergencyStop());
+    if (atCloseAllBtn) atCloseAllBtn.addEventListener('click', () => AutoTrade.closeAll());
     if (atSaveConfigBtn) atSaveConfigBtn.addEventListener('click', () => AutoTrade.saveConfig());
     if (atSaveConnectBtn) atSaveConnectBtn.addEventListener('click', () => AutoTrade.connectAccount());
+    if (refreshAuditBtn) refreshAuditBtn.addEventListener('click', () => AutoTrade.syncStatus());
 
-    // AutoTrade Modal Tabs Switching
-    document.querySelectorAll('.admin-tab-btn[data-attab]').forEach(btn => {
+    // Tabs Switching for AutoTrade modal
+    document.querySelectorAll('.at-tab-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
-            document.querySelectorAll('.admin-tab-btn[data-attab]').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.at-tab-content').forEach(c => { c.style.display = 'none'; c.classList.remove('active'); });
-            
+            document.querySelectorAll('.at-tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.at-tab-content').forEach(c => { c.style.display = 'none'; });
+
             e.currentTarget.classList.add('active');
-            const targetTab = document.getElementById(`attab-${e.currentTarget.getAttribute('data-attab')}`);
-            if (targetTab) {
-                targetTab.style.display = 'block';
-                targetTab.classList.add('active');
-            }
+            const targetId = e.currentTarget.getAttribute('data-tab');
+            const targetEl = document.getElementById(targetId);
+            if (targetEl) targetEl.style.display = 'block';
         });
     });
 
-    // AutoTrade Status Polling every 2.5 seconds
-    setInterval(() => { AutoTrade.syncStatus(); }, 2500);
+    // AutoTrade Status Polling every 2 seconds
+    setInterval(() => { AutoTrade.syncStatus(); }, 2000);
     AutoTrade.syncStatus();
-
 
 }); // End DOMContentLoaded

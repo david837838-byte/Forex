@@ -453,364 +453,465 @@ def api_backtest():
         return jsonify({'status': 'error', 'message': str(e)})
 
 
+# ==========================================================================
+# INSTITUTIONAL-GRADE PRODUCTION AUTOMATED TRADING & MT5 RISK ENGINE
+# ==========================================================================
+import hashlib
 
-# ==========================================================================
-# AUTOMATED TRADE EXECUTION ENGINE (AUTOTRADE & RISK MANAGER)
-# ==========================================================================
 autotrade_lock = threading.Lock()
+execution_mutex = threading.Lock()
+
+# Security & Webhook Secret
+EA_WEBHOOK_SECRET = "marketpulse_live_bridge_sec_2026"
 
 autotrade_state = {
     'enabled': False,
-    'mode': 'demo',  # 'demo' | 'real'
+    'mode': 'demo',               # 'demo' | 'live'
+    'emergency_stop': False,      # Emergency Kill Switch active flag
+    'emergency_reason': '',
     'account': {
+        'connected': False,
+        'bridge_mode': 'DISCONNECTED', # 'EA_WEBHOOK_LIVE' | 'DISCONNECTED'
         'server': 'JustMarkets-Demo',
-        'login': '10982341',
-        'password': '•••',
-        'connected': True,
-        'balance': 40000.00,
-        'equity': 40000.00,
-        'free_margin': 40000.00,
-        'currency': 'USD'
+        'login': '',
+        'balance': 0.0,
+        'equity': 0.0,
+        'margin': 0.0,
+        'free_margin': 0.0,
+        'margin_level': 0.0,
+        'currency': 'USD',
+        'leverage': 100,
+        'last_sync_time': '',
+        'last_heartbeat': 0.0,
+        'latency_ms': 0.0
     },
     'risk_config': {
-        'risk_percent': 1.0,      # 1.0% of balance
-        'max_lot_cap': 0.50,       # Maximum allowed lot size
-        'max_open_trades': 3,      # Max simultaneous open trades
-        'min_score': 75,           # Minimum signal score required to execute
-        'auto_breakeven': True,    # Move SL to entry after TP1
-        'partial_tp1_close': True  # Close 50% volume at TP1
+        'risk_percent': 1.0,          # 1.0% risk per trade
+        'max_lot_cap': 0.50,          # Strict lot ceiling
+        'max_open_trades': 3,         # Max simultaneous positions
+        'max_daily_trades': 10,       # Max trades allowed per calendar day
+        'max_daily_loss_pct': 3.0,    # 3.0% daily loss limit (Kill Switch trigger)
+        'min_score': 75,              # Minimum signal score required
+        'auto_breakeven': True,       # Move SL to Entry + buffer at TP1
+        'breakeven_buffer_pips': 2.0,
+        'partial_tp1_close_pct': 50,  # Close 50% at TP1
+        'partial_tp2_close_pct': 30,  # Close 30% at TP2
+        'trailing_stop_enabled': False,
+        'trailing_atr_multiplier': 1.5,
+        'max_spread_pips': { 'forex': 2.5, 'gold': 0.45, 'crypto': 35.0, 'oil': 0.06, 'stocks': 0.35 },
+        'news_filter_minutes': 30,    # 30m window around High Impact news
+        'consecutive_loss_limit': 2,  # Max consecutive losses before cooldown
+        'loss_cooldown_minutes': 30   # 30-min cooldown
+    },
+    'daily_stats': {
+        'date': time.strftime('%Y-%m-%d'),
+        'trades_opened': 0,
+        'starting_balance': 0.0,
+        'realized_pnl': 0.0,
+        'floating_pnl': 0.0,
+        'consecutive_losses': 0,
+        'cooldown_until': 0.0,
+        'peak_equity': 0.0
     },
     'open_positions': [],
     'history': []
 }
 
-def get_contract_size(symbol):
-    sym = symbol.upper()
-    if 'XAU' in sym or 'GOLD' in sym: return 100.0
-    if 'XAG' in sym or 'SILVER' in sym: return 5000.0
-    if 'OIL' in sym: return 1000.0
-    if 'BTC' in sym or 'ETH' in sym or 'SOL' in sym: return 1.0
-    if 'NVDA' in sym or 'TSLA' in sym or 'AAPL' in sym: return 10.0
-    if 'US30' in sym or 'US100' in sym: return 1.0
-    return 100000.0  # Standard Forex Lot
+autotrade_command_queue = []
+idempotency_store = {}  # { hash: timestamp }
+audit_logs = []         # Chronological audit log buffer (max 200 items)
+rate_limit_tracker = {} # { ip: [timestamps] }
 
-def calculate_auto_lot(symbol, entry_price, sl_price, balance, risk_percent, max_lot_cap):
+def log_audit_event(event_type, symbol, ticket, reason, details=None):
+    """Records a secure timestamped audit log entry."""
+    entry = {
+        'id': f"LOG-{int(time.time()*1000)%1000000}",
+        'time': time.strftime('%H:%M:%S'),
+        'timestamp': time.time(),
+        'event': event_type,
+        'symbol': symbol or 'ALL',
+        'ticket': ticket or '—',
+        'reason': reason,
+        'details': details or {}
+    }
+    with autotrade_lock:
+        audit_logs.insert(0, entry)
+        if len(audit_logs) > 200:
+            audit_logs.pop()
+    try:
+        print(f"[AUDIT LOG] [{entry['time']}] {event_type} | {symbol} | Ticket: {ticket} | {reason}")
+    except Exception:
+        pass
+
+def check_ip_rate_limit(client_ip, limit=60, window=60):
+    now = time.time()
+    if client_ip not in rate_limit_tracker:
+        rate_limit_tracker[client_ip] = []
+    # Purge old
+    rate_limit_tracker[client_ip] = [t for t in rate_limit_tracker[client_ip] if now - t < window]
+    if len(rate_limit_tracker[client_ip]) >= limit:
+        return False
+    rate_limit_tracker[client_ip].append(now)
+    return True
+
+# ==========================================================================
+# POSITION SIZING & CONTRACT SPECIFICATION ENGINE
+# ==========================================================================
+CONTRACT_SPECS = {
+    'XAUUSD': { 'size': 100.0,   'category': 'gold',   'point': 0.01,  'tick_val': 1.0 },
+    'XAGUSD': { 'size': 5000.0,  'category': 'gold',   'point': 0.001, 'tick_val': 5.0 },
+    'USOIL':  { 'size': 1000.0,  'category': 'oil',    'point': 0.01,  'tick_val': 10.0 },
+    'NGAS':   { 'size': 10000.0, 'category': 'oil',    'point': 0.001, 'tick_val': 10.0 },
+    'BTCUSD': { 'size': 1.0,     'category': 'crypto', 'point': 0.01,  'tick_val': 1.0 },
+    'ETHUSD': { 'size': 1.0,     'category': 'crypto', 'point': 0.01,  'tick_val': 1.0 },
+    'SOLUSD': { 'size': 1.0,     'category': 'crypto', 'point': 0.01,  'tick_val': 1.0 },
+    'US30':   { 'size': 1.0,     'category': 'stocks', 'point': 1.0,   'tick_val': 1.0 },
+    'US100':  { 'size': 1.0,     'category': 'stocks', 'point': 1.0,   'tick_val': 1.0 },
+    'NVDA':   { 'size': 10.0,    'category': 'stocks', 'point': 0.01,  'tick_val': 0.10 },
+    'TSLA':   { 'size': 10.0,    'category': 'stocks', 'point': 0.01,  'tick_val': 0.10 },
+    'AAPL':   { 'size': 10.0,    'category': 'stocks', 'point': 0.01,  'tick_val': 0.10 }
+}
+
+def get_symbol_spec(symbol):
+    sym = symbol.upper()
+    if sym in CONTRACT_SPECS:
+        return CONTRACT_SPECS[sym]
+    # Default Standard Forex Pair
+    return { 'size': 100000.0, 'category': 'forex', 'point': 0.0001 if 'JPY' not in sym else 0.01, 'tick_val': 10.0 }
+
+def calculate_risk_position_size(symbol, entry_price, sl_price, balance, risk_percent, max_lot_cap):
+    """Calculates exact risk-based lot size based on balance, risk %, and stop loss distance."""
     sl_dist = abs(entry_price - sl_price)
-    if sl_dist <= 0: return 0.01
+    if sl_dist <= 0 or balance <= 0:
+        return 0.01
     
-    contract_size = get_contract_size(symbol)
-    risk_amount = balance * (risk_percent / 100.0)
+    spec = get_symbol_spec(symbol)
+    contract_size = spec['size']
+    risk_dollars = balance * (risk_percent / 100.0)
     
-    calculated_lot = risk_amount / (sl_dist * contract_size)
-    calculated_lot = max(0.01, min(max_lot_cap, round(calculated_lot, 2)))
+    raw_lot = risk_dollars / (sl_dist * contract_size)
+    calculated_lot = max(0.01, min(max_lot_cap, round(raw_lot, 2)))
     return calculated_lot
 
-def position_manager_worker():
-    """24/7 Background Thread: Monitors open trades, calculates live PnL, executes TP1/TP2/TP3 and Break-Even."""
+# ==========================================================================
+# 15-POINT INSTITUTIONAL MULTI-LAYER RISK ENGINE
+# ==========================================================================
+def validate_trade_risk(signal_data):
+    """Strict 15-point multi-layer risk inspection before order dispatch."""
+    now = time.time()
+    today_str = time.strftime('%Y-%m-%d')
+    symbol = signal_data.get('symbol', '').upper()
+    trade_type = signal_data.get('type', '').upper()
+    entry = float(signal_data.get('entry', 0))
+    sl = float(signal_data.get('sl', 0))
+    tp1 = float(signal_data.get('tp1', 0))
+    score = int(signal_data.get('score', 0))
+    signal_id = signal_data.get('signal_id') or signal_data.get('id') or f"{symbol}_{trade_type}_{int(now)}"
+
+    with autotrade_lock:
+        # Reset daily stats at midnight
+        if autotrade_state['daily_stats']['date'] != today_str:
+            autotrade_state['daily_stats'] = {
+                'date': today_str,
+                'trades_opened': 0,
+                'starting_balance': autotrade_state['account']['balance'],
+                'realized_pnl': 0.0,
+                'floating_pnl': 0.0,
+                'consecutive_losses': 0,
+                'cooldown_until': 0.0,
+                'peak_equity': autotrade_state['account']['equity']
+            }
+
+        cfg = autotrade_state['risk_config']
+        acc = autotrade_state['account']
+        d_stats = autotrade_state['daily_stats']
+
+        # 1. Master AutoTrade Enable Check
+        if not autotrade_state['enabled']:
+            return False, "AUTOTRADE_DISABLED", "التداول الآلي متوقف حالياً في لوحة التحكم"
+
+        # 2. Emergency Kill Switch Check
+        if autotrade_state['emergency_stop']:
+            return False, "EMERGENCY_STOP_ACTIVE", f"تم تفعيل زر الطوارئ سابقاً: {autotrade_state['emergency_reason']}"
+
+        # 3. Live MT5 Heartbeat & Connection Check (< 10 seconds fresh)
+        heartbeat_age = now - acc['last_heartbeat']
+        if not acc['connected'] or (acc['last_heartbeat'] > 0 and heartbeat_age > 10.0):
+            return False, "MT5_DISCONNECTED", "انقطع الاتصال ببرنامج الميتاتريدر أو توقف الإكسبرت (Heartbeat Timeout > 10s)"
+
+        # 4. Starting Balance & Drawdown Calculation
+        if d_stats['starting_balance'] <= 0:
+            d_stats['starting_balance'] = acc['balance'] if acc['balance'] > 0 else 40000.0
+
+        daily_drawdown_pct = 0.0
+        if d_stats['starting_balance'] > 0:
+            total_daily_loss = -(d_stats['realized_pnl'] + min(0, d_stats['floating_pnl']))
+            daily_drawdown_pct = (total_daily_loss / d_stats['starting_balance']) * 100.0
+
+        # 5. Maximum Daily Loss (Kill Switch Trigger)
+        if daily_drawdown_pct >= cfg['max_daily_loss_pct']:
+            autotrade_state['emergency_stop'] = True
+            autotrade_state['emergency_reason'] = f"تجاوز سقف الخسارة اليومية ({daily_drawdown_pct:.2f}% >= {cfg['max_daily_loss_pct']}%)"
+            autotrade_state['enabled'] = False
+            log_audit_event("EMERGENCY_KILL_SWITCH", symbol, None, autotrade_state['emergency_reason'])
+            return False, "MAX_DAILY_LOSS_EXCEEDED", autotrade_state['emergency_reason']
+
+        # 6. Consecutive Loss Cooldown Check
+        if now < d_stats.get('cooldown_until', 0):
+            remain_mins = int((d_stats['cooldown_until'] - now) / 60)
+            return False, "LOSS_COOLDOWN_ACTIVE", f"فترة تبريد نشطة بعد خسارتين متتاليتين (متبقي {remain_mins} دقيقة)"
+
+        # 7. Max Open Trades Limit Check
+        if len(autotrade_state['open_positions']) >= cfg['max_open_trades']:
+            return False, "MAX_OPEN_TRADES_LIMIT", f"تم بلوغ الحد الأقصى للصفقات المفتوحة ({len(autotrade_state['open_positions'])}/{cfg['max_open_trades']})"
+
+        # 8. Max Daily Trades Limit Check
+        if d_stats['trades_opened'] >= cfg['max_daily_trades']:
+            return False, "MAX_DAILY_TRADES_LIMIT", f"تم بلوغ الحد الأقصى للصفقات اليومية ({d_stats['trades_opened']}/{cfg['max_daily_trades']})"
+
+        # 9. Same Symbol Open Protection
+        for pos in autotrade_state['open_positions']:
+            if pos['symbol'].upper() == symbol:
+                return False, "SAME_SYMBOL_ACTIVE", f"توجد صفقة مفتوحة بالفعل على الزوج {symbol}"
+
+        # 10. Currency Correlation Exposure Check (Max 2 simultaneous USD-based positions)
+        if 'USD' in symbol:
+            usd_count = sum(1 for p in autotrade_state['open_positions'] if 'USD' in p['symbol'].upper())
+            if usd_count >= 2:
+                return False, "CORRELATION_EXPOSURE_LIMIT", f"تم بلوغ الحد الأقصى للتعرض المالي لعملة الدولار USD ({usd_count} صفقات مفتوحة)"
+
+        # 11. Confluence Score Threshold Check
+        if score < cfg['min_score']:
+            return False, "SCORE_BELOW_MINIMUM", f"نقاط التوافق الفني ({score}) أقل من الحد الأدنى المطلوب ({cfg['min_score']})"
+
+        # 12. Valid Stop Loss Distance & Broker Stop Level
+        sl_dist = abs(entry - sl)
+        spec = get_symbol_spec(symbol)
+        min_stop_distance = spec['point'] * 15  # Minimum 15 points
+        if sl_dist < min_stop_distance:
+            return False, "INVALID_STOP_LOSS", f"مسافة وقف الخسارة ({sl_dist}) أقل من الحد الأدنى المسموح ({min_stop_distance})"
+
+        # 13. Risk/Reward Ratio Check (Must be >= 1:1.5)
+        tp_dist = abs(tp1 - entry)
+        if sl_dist > 0 and (tp_dist / sl_dist) < 1.40:
+            return False, "INVALID_RISK_REWARD", f"نسبة العائد إلى المخاطرة ({tp_dist/sl_dist:.2f}) أقل من الحد الأدنى 1:1.5"
+
+        # 14. Margin Sufficiency Check
+        calculated_lot = calculate_risk_position_size(symbol, entry, sl, acc['balance'], cfg['risk_percent'], cfg['max_lot_cap'])
+        required_margin = (calculated_lot * spec['size'] * entry) / max(1, acc['leverage'])
+        if acc['free_margin'] > 0 and required_margin > (acc['free_margin'] * 0.80):
+            return False, "INSUFFICIENT_MARGIN", f"الهامش المتاح غير كافٍ لفتح لوت {calculated_lot} (المطلوب: ${required_margin:.2f}, المتاح: ${acc['free_margin']:.2f})"
+
+        # 15. Idempotency Key Duplicate Prevention
+        idem_key = hashlib.sha256(f"{symbol}_{trade_type}_{int(now//30)}".encode('utf-8')).hexdigest()
+        if idem_key in idempotency_store and (now - idempotency_store[idem_key] < 60):
+            return False, "DUPLICATE_IDEMPOTENT_SIGNAL", "تم تجاهل الإشارة لأنها مكررة في نفس النافذة الزمنية"
+        idempotency_store[idem_key] = now
+
+        return True, "RISK_APPROVED", {
+            'lot': calculated_lot,
+            'signal_id': signal_id,
+            'idempotency_key': idem_key
+        }
+
+# ==========================================================================
+# 24/7 BACKGROUND POSITION LIFECYCLE & TRAILING STOP MANAGER
+# ==========================================================================
+def position_lifecycle_worker():
+    """Monitors active positions, updates floating PnL, executes TP1/TP2/TP3 & Trailing Stops."""
     while True:
         try:
-            time.sleep(2)
+            time.sleep(1.5)
+            now = time.time()
             with autotrade_lock:
+                # Check MT5 heartbeat timeout
+                if autotrade_state['account']['connected'] and autotrade_state['account']['last_heartbeat'] > 0:
+                    if (now - autotrade_state['account']['last_heartbeat']) > 10.0:
+                        autotrade_state['account']['connected'] = False
+                        autotrade_state['account']['bridge_mode'] = 'DISCONNECTED'
+                        log_audit_event("MT5_HEARTBEAT_TIMEOUT", "SYSTEM", None, "انقطع الاتصال بالإكسبرت (Heartbeat Timeout > 10s)")
+
                 if not autotrade_state['open_positions']:
-                    autotrade_state['account']['equity'] = autotrade_state['account']['balance']
+                    autotrade_state['daily_stats']['floating_pnl'] = 0.0
+                    if autotrade_state['account']['connected']:
+                        autotrade_state['account']['equity'] = autotrade_state['account']['balance']
                     continue
 
-                total_floating_pnl = 0.0
-                active_list = []
+                total_floating = 0.0
+                active_positions = []
+                cfg = autotrade_state['risk_config']
 
                 for pos in autotrade_state['open_positions']:
                     sym = pos['symbol']
                     cur_p = None
-                    
-                    # Fetch live price from price_cache
                     with cache_lock:
                         if sym in price_cache['data']:
                             cur_p = price_cache['data'][sym].get('price')
 
                     if not cur_p or cur_p <= 0:
-                        active_list.append(pos)
+                        active_positions.append(pos)
                         continue
 
-                    contract_size = get_contract_size(sym)
+                    spec = get_symbol_spec(sym)
                     is_buy = pos['type'].upper() == 'BUY'
-                    
-                    # Floating PnL
+
+                    # Calculate Floating PnL
                     if is_buy:
-                        pnl = (cur_p - pos['entry']) * pos['lot'] * contract_size
+                        pnl = (cur_p - pos['entry']) * pos['lot'] * spec['size']
                     else:
-                        pnl = (pos['entry'] - cur_p) * pos['lot'] * contract_size
-                    
+                        pnl = (pos['entry'] - cur_p) * pos['lot'] * spec['size']
+
                     pos['current_price'] = cur_p
                     pos['pnl'] = round(pnl, 2)
-                    total_floating_pnl += pnl
+                    total_floating += pnl
 
-                    # Check Stop Loss Hit
+                    # 1. Stop Loss Hit Check
                     sl_hit = (cur_p <= pos['sl']) if is_buy else (cur_p >= pos['sl'])
                     if sl_hit:
                         autotrade_state['account']['balance'] += pnl
                         autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
+                        autotrade_state['daily_stats']['realized_pnl'] += pnl
+                        autotrade_state['daily_stats']['consecutive_losses'] += 1
+                        
+                        # Cooldown check
+                        if autotrade_state['daily_stats']['consecutive_losses'] >= cfg['consecutive_loss_limit']:
+                            autotrade_state['daily_stats']['cooldown_until'] = now + (cfg['loss_cooldown_minutes'] * 60)
+                            log_audit_event("COOLDOWN_TRIGGERED", sym, pos['ticket'], f"تفعيل فترة تبريد لمدة {cfg['loss_cooldown_minutes']} دقيقة بعد {cfg['consecutive_loss_limit']} خسائر متتالية")
+
                         pos['status'] = 'CLOSED_SL'
                         pos['close_price'] = cur_p
                         pos['close_time'] = time.strftime('%H:%M:%S')
                         autotrade_state['history'].insert(0, pos)
-                        continue  # Do not keep in active_list
+                        log_audit_event("POSITION_CLOSED_SL", sym, pos['ticket'], f"ضرب وقف الخسارة عند {cur_p} (خسارة: ${pnl:.2f})")
+                        continue
 
-                    # Check TP1 Hit (Partial Profit + Auto Break-Even)
+                    # 2. TP1 Hit Check (Auto Break-Even & 50% Partial Close)
                     tp1_hit = (cur_p >= pos['tp1']) if is_buy else (cur_p <= pos['tp1'])
                     if tp1_hit and not pos.get('tp1_hit'):
                         pos['tp1_hit'] = True
-                        if autotrade_state['risk_config']['partial_tp1_close']:
-                            realized_profit = pnl * 0.5
-                            autotrade_state['account']['balance'] += realized_profit
-                            autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
-                            pos['lot'] = round(max(0.01, pos['lot'] * 0.5), 2)
-                        
-                        if autotrade_state['risk_config']['auto_breakeven']:
-                            pos['sl'] = pos['entry']  # Move SL to Entry (Zero Risk!)
-                            pos['notes'] = 'تم تأمين الصفقة ونقل الوقف لنقطة الدخول 🛡️'
+                        close_vol = round(pos['lot'] * 0.50, 2)
+                        if close_vol >= 0.01:
+                            realized = (pnl * 0.50)
+                            autotrade_state['account']['balance'] += realized
+                            autotrade_state['daily_stats']['realized_pnl'] += realized
+                            pos['lot'] = round(pos['lot'] - close_vol, 2)
+                            log_audit_event("TP1_PARTIAL_CLOSE", sym, pos['ticket'], f"إغلاق جزئي 50% ({close_vol} لوت) وحجز ربح ${realized:.2f}")
 
-                    # Check TP2 Hit (Take full/remaining profit)
-                    tp2_hit = (cur_p >= pos['tp2']) if is_buy else (cur_p <= pos['tp2'])
-                    if tp2_hit:
-                        autotrade_state['account']['balance'] += pnl
-                        autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
-                        pos['status'] = 'CLOSED_TP2'
-                        pos['close_price'] = cur_p
-                        pos['close_time'] = time.strftime('%H:%M:%S')
-                        autotrade_state['history'].insert(0, pos)
-                        continue
+                        # Auto Break-Even Buffer
+                        if cfg['auto_breakeven']:
+                            buf = spec['point'] * cfg['breakeven_buffer_pips'] * 10
+                            new_sl = round(pos['entry'] + buf if is_buy else pos['entry'] - buf, 5)
+                            # Never move SL backwards!
+                            if (is_buy and new_sl > pos['sl']) or (not is_buy and new_sl < pos['sl']):
+                                pos['sl'] = new_sl
+                                pos['notes'] = f"تم تأمين الصفقة ونقل الوقف للدخول ({new_sl}) 🛡️"
+                                log_audit_event("AUTO_BREAKEVEN_TRIGGERED", sym, pos['ticket'], f"نقل وقف الخسارة إلى سعر الدخول مع هامش أمان ({new_sl})")
+                                autotrade_command_queue.append({
+                                    'action': 'MODIFY_SL',
+                                    'ticket': pos['ticket'],
+                                    'symbol': sym,
+                                    'new_sl': new_sl,
+                                    'new_tp': pos.get('tp2', pos['tp1'])
+                                })
 
-                    active_list.append(pos)
+                    # 3. TP2 Hit Check (30% Partial Close)
+                    if pos.get('tp2') and not pos.get('tp2_hit'):
+                        tp2_hit = (cur_p >= pos['tp2']) if is_buy else (cur_p <= pos['tp2'])
+                        if tp2_hit:
+                            pos['tp2_hit'] = True
+                            close_vol = round(pos['lot'] * 0.60, 2) # 30% of original
+                            if close_vol >= 0.01:
+                                realized = (pnl * 0.60)
+                                autotrade_state['account']['balance'] += realized
+                                autotrade_state['daily_stats']['realized_pnl'] += realized
+                                pos['lot'] = round(pos['lot'] - close_vol, 2)
+                                log_audit_event("TP2_PARTIAL_CLOSE", sym, pos['ticket'], f"إغلاق الهدف الثاني TP2 وحجز ربح ${realized:.2f}")
 
-                autotrade_state['open_positions'] = active_list
-                autotrade_state['account']['equity'] = round(autotrade_state['account']['balance'] + total_floating_pnl, 2)
-                autotrade_state['account']['free_margin'] = round(autotrade_state['account']['equity'] * 0.95, 2)
+                    # 4. TP3 Hit Check (Final Target Full Close)
+                    if pos.get('tp3'):
+                        tp3_hit = (cur_p >= pos['tp3']) if is_buy else (cur_p <= pos['tp3'])
+                        if tp3_hit:
+                            autotrade_state['account']['balance'] += pnl
+                            autotrade_state['daily_stats']['realized_pnl'] += pnl
+                            autotrade_state['daily_stats']['consecutive_losses'] = 0
+                            pos['status'] = 'CLOSED_TP3'
+                            pos['close_price'] = cur_p
+                            pos['close_time'] = time.strftime('%H:%M:%S')
+                            autotrade_state['history'].insert(0, pos)
+                            log_audit_event("POSITION_CLOSED_TP3", sym, pos['ticket'], f"تحقيق الهدف النهائي بالكامل TP3 (ربح: ${pnl:.2f})")
+                            continue
+
+                    active_positions.append(pos)
+
+                autotrade_state['open_positions'] = active_positions
+                autotrade_state['daily_stats']['floating_pnl'] = round(total_floating, 2)
+                if autotrade_state['account']['connected']:
+                    autotrade_state['account']['equity'] = round(autotrade_state['account']['balance'] + total_floating, 2)
+                    autotrade_state['account']['free_margin'] = round(max(0, autotrade_state['account']['equity'] - autotrade_state['account']['margin']), 2)
+                    if autotrade_state['account']['margin'] > 0:
+                        autotrade_state['account']['margin_level'] = round((autotrade_state['account']['equity'] / autotrade_state['account']['margin']) * 100, 2)
         except Exception as e:
-            print(f"[AUTOTRADE MONITOR ERROR] {e}")
+            print(f"[POSITION LIFECYCLE WORKER ERROR] {e}")
 
-# Start Background Position Monitor
-threading.Thread(target=position_manager_worker, daemon=True).start()
+threading.Thread(target=position_lifecycle_worker, daemon=True).start()
 
 # ==========================================================================
-# AUTOTRADE REST API ENDPOINTS
+# PRODUCTION REST API ENDPOINTS
 # ==========================================================================
 @app.route('/api/autotrade/status', methods=['GET'])
-def autotrade_status():
+def autotrade_get_status():
     with autotrade_lock:
+        now = time.time()
+        is_fresh = (now - autotrade_state['account']['last_heartbeat']) < 10.0 if autotrade_state['account']['last_heartbeat'] > 0 else False
         return jsonify({
             'status': 'success',
             'enabled': autotrade_state['enabled'],
             'mode': autotrade_state['mode'],
+            'emergency_stop': autotrade_state['emergency_stop'],
+            'emergency_reason': autotrade_state['emergency_reason'],
+            'is_heartbeat_fresh': is_fresh,
             'account': autotrade_state['account'],
             'risk_config': autotrade_state['risk_config'],
-            'open_positions': autotrade_state['open_positions'],
-            'history': autotrade_state['history'][:10]
+            'daily_stats': autotrade_state['daily_stats'],
+            'open_positions_count': len(autotrade_state['open_positions']),
+            'history_count': len(autotrade_state['history'])
         })
 
-
-# ==========================================================================
-# METAAPI.CLOUD REST API DIRECT BROKER CONNECTOR
-# ==========================================================================
-metaapi_config = {
-    'token': '',
-    'account_id': '',
-    'connected': False,
-    'last_sync': 0
-}
-
-def metaapi_http_request(endpoint, method='GET', payload=None, token=None):
-    use_token = token or metaapi_config.get('token')
-    if not use_token: return None
-    
-    headers = {
-        'auth-token': use_token,
-        'Content-Type': 'application/json',
-        'User-Agent': 'MarketPulse-FX/1.0'
-    }
-    
-    url = f"https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai{endpoint}"
-    if 'provisioning' in endpoint:
-        url = f"https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai{endpoint.replace('/provisioning', '')}"
-    
-    try:
-        data_bytes = json.dumps(payload).encode('utf-8') if payload else None
-        req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        print(f"[METAAPI HTTP ERROR] {e.code}: {e.read().decode('utf-8', errors='ignore')}")
-        return None
-    except Exception as e:
-        print(f"[METAAPI ERROR] {e}")
-        return None
-
-def metaapi_deploy_account(token, server, login, password):
-    """Deploys and connects MT5 account to MetaApi Cloud."""
-    payload = {
-        "name": f"MarketPulse_{server}_{login}",
-        "type": "cloud",
-        "login": str(login),
-        "password": str(password),
-        "server": str(server),
-        "platform": "mt5",
-        "magic": 888999
-    }
-    
-    # 1. Search existing or create new account
-    res = metaapi_http_request('/provisioning/users/current/accounts', method='POST', payload=payload, token=token)
-    if res and 'id' in res:
-        acc_id = res['id']
-        # 2. Deploy instance
-        metaapi_http_request(f'/provisioning/users/current/accounts/{acc_id}/deploy', method='POST', token=token)
-        return acc_id
-    
-    # If already exists, search by login
-    accs = metaapi_http_request('/provisioning/users/current/accounts', method='GET', token=token)
-    if isinstance(accs, list):
-        for a in accs:
-            if str(a.get('login')) == str(login):
-                acc_id = a.get('id')
-                metaapi_http_request(f'/provisioning/users/current/accounts/{acc_id}/deploy', method='POST', token=token)
-                return acc_id
-    return None
-
-def metaapi_sync_worker():
-    """Background 2-Second Poller for MetaApi Cloud Live Broker Data."""
-    while True:
-        try:
-            time.sleep(2.5)
-            if not metaapi_config.get('connected') or not metaapi_config.get('account_id'):
-                continue
-            
-            acc_id = metaapi_config['account_id']
-            token = metaapi_config['token']
-            
-            # Fetch Live Account Info
-            info = metaapi_http_request(f'/users/current/accounts/{acc_id}/information', method='GET', token=token)
-            if info:
-                with autotrade_lock:
-                    b = info.get('balance', 0)
-                    eq = info.get('equity', 0)
-                    mar = info.get('freeMargin', 0)
-                    if b > 0:
-                        autotrade_state['account']['balance'] = round(b, 2)
-                        autotrade_state['account']['equity'] = round(eq, 2)
-                        autotrade_state['account']['free_margin'] = round(mar, 2)
-                        autotrade_state['account']['bridge_mode'] = 'METAAPI_CLOUD_LIVE'
-                        autotrade_state['account']['last_sync_time'] = time.strftime('%H:%M:%S')
-
-            # Fetch Live Positions
-            raw_positions = metaapi_http_request(f'/users/current/accounts/{acc_id}/positions', method='GET', token=token)
-            if isinstance(raw_positions, list):
-                pos_list = []
-                for p in raw_positions:
-                    pos_list.append({
-                        'ticket': str(p.get('id', p.get('ticket', ''))),
-                        'symbol': p.get('symbol'),
-                        'type': 'BUY' if 'BUY' in p.get('type', '') else 'SELL',
-                        'lot': float(p.get('volume', 0.01)),
-                        'entry': float(p.get('openPrice', 0)),
-                        'current_price': float(p.get('currentPrice', 0)),
-                        'sl': float(p.get('stopLoss', 0)),
-                        'tp1': float(p.get('takeProfit', 0)),
-                        'pnl': round(float(p.get('profit', 0) + p.get('swap', 0)), 2),
-                        'notes': 'MetaApi Cloud Live'
-                    })
-                with autotrade_lock:
-                    autotrade_state['open_positions'] = pos_list
-        except Exception as e:
-            print(f"[METAAPI SYNC ERROR] {e}")
-
-threading.Thread(target=metaapi_sync_worker, daemon=True).start()
-
 @app.route('/api/autotrade/connect', methods=['POST'])
-def autotrade_connect():
+def autotrade_post_connect():
     data = request.json or {}
-    server = data.get('server', 'JustMarkets-Demo')
-    login = str(data.get('login', '10982341'))
+    server_name = data.get('server', 'JustMarkets-Demo').strip()
+    login = str(data.get('login', '')).strip()
     password = data.get('password', '')
     mode = data.get('mode', 'demo')
-    metaapi_token = data.get('metaapi_token', '').strip()
 
     with autotrade_lock:
         autotrade_state['mode'] = mode
-        autotrade_state['account']['server'] = server
-        autotrade_state['account']['login'] = login
-        autotrade_state['account']['connected'] = True
-        
-        # 1. If MetaApi Cloud Token is provided, deploy cloud bridge directly
-        if metaapi_token:
-            acc_id = metaapi_deploy_account(metaapi_token, server, login, password)
-            if acc_id:
-                metaapi_config['token'] = metaapi_token
-                metaapi_config['account_id'] = acc_id
-                metaapi_config['connected'] = True
-                autotrade_state['account']['bridge_mode'] = 'METAAPI_CLOUD_LIVE'
-                print(f"[METAAPI CLOUD CONNECTED] Account ID: {acc_id} for {server} #{login}")
-                return jsonify({
-                    'status': 'success',
-                    'message': f'تم الربط السحابي المباشر عبر MetaApi بحساب ({server} - #{login}) بنجاح 🟢',
-                    'account': autotrade_state['account']
-                })
-        
-        # 2. Local/VPS launcher fallback
-        if login and password:
-            launch_vps_mt5_terminal(login, password, server)
-        
-        # Try real MT5 connection if MetaTrader5 package is available
-        mt5_connected = False
-        try:
-            import MetaTrader5 as mt5
-            if mt5.initialize():
-                if mt5.login(int(login), password=password, server=server):
-                    acc_info = mt5.account_info()
-                    if acc_info and acc_info.balance > 0:
-                        autotrade_state['account']['balance'] = round(acc_info.balance, 2)
-                        autotrade_state['account']['equity'] = round(acc_info.equity, 2)
-                        autotrade_state['account']['free_margin'] = round(acc_info.margin_free, 2)
-                        mt5_connected = True
-        except Exception as e:
-            pass
+        autotrade_state['account']['server'] = server_name
+        if login: autotrade_state['account']['login'] = login
+        autotrade_state['emergency_stop'] = False
+        autotrade_state['emergency_reason'] = ''
 
-        if not mt5_connected:
-            if custom_balance > 0:
-                autotrade_state['account']['balance'] = custom_balance
-                autotrade_state['account']['equity'] = custom_balance
-                autotrade_state['account']['free_margin'] = custom_balance
-            elif autotrade_state['account']['balance'] <= 0:
-                autotrade_state['account']['balance'] = 40000.00
-                autotrade_state['account']['equity'] = 40000.00
-                autotrade_state['account']['free_margin'] = 40000.00
-
-    bal_display = f"${autotrade_state['account']['balance']:,.2f}"
+    log_audit_event("ACCOUNT_CREDENTIALS_SET", "SYSTEM", None, f"تم حفظ إعدادات حساب ({server_name} #{login} - وضع {mode.upper()})")
     return jsonify({
         'status': 'success',
-        'message': f'تم مزامنة حساب الميتاتريدر ({server} - #{login}) برصيد {bal_display} بنجاح 🟢',
+        'message': f'تم حفظ وتجهيز إعدادات الاتصال بحساب ({server_name} #{login}) بنجاح 🟢',
+        'webhook_secret': EA_WEBHOOK_SECRET,
         'account': autotrade_state['account']
     })
 
-@app.route('/api/autotrade/config', methods=['POST'])
-def autotrade_config():
-    data = request.json or {}
+@app.route('/api/autotrade/disconnect', methods=['POST'])
+def autotrade_post_disconnect():
     with autotrade_lock:
-        cfg = autotrade_state['risk_config']
-        if 'risk_percent' in data: cfg['risk_percent'] = float(data['risk_percent'])
-        if 'max_lot_cap' in data: cfg['max_lot_cap'] = float(data['max_lot_cap'])
-        if 'max_open_trades' in data: cfg['max_open_trades'] = int(data['max_open_trades'])
-        if 'min_score' in data: cfg['min_score'] = int(data['min_score'])
-        if 'auto_breakeven' in data: cfg['auto_breakeven'] = bool(data['auto_breakeven'])
-        if 'partial_tp1_close' in data: cfg['partial_tp1_close'] = bool(data['partial_tp1_close'])
-        
-        if 'balance' in data and float(data['balance']) > 0:
-            b = float(data['balance'])
-            autotrade_state['account']['balance'] = b
-            autotrade_state['account']['equity'] = b
-            autotrade_state['account']['free_margin'] = b
-            
-    return jsonify({'status': 'success', 'config': autotrade_state['risk_config'], 'account': autotrade_state['account']})
+        autotrade_state['account']['connected'] = False
+        autotrade_state['account']['bridge_mode'] = 'DISCONNECTED'
+        autotrade_state['account']['last_heartbeat'] = 0.0
+        autotrade_state['enabled'] = False
+    log_audit_event("BROKER_DISCONNECTED", "SYSTEM", None, "تم قطع الاتصال بالبروكر يدوياً")
+    return jsonify({'status': 'success', 'message': 'تم قطع الاتصال بالوسيط بنجاح 🔴'})
 
 @app.route('/api/autotrade/toggle', methods=['POST'])
-def autotrade_toggle():
+def autotrade_post_toggle():
     data = request.json or {}
     with autotrade_lock:
         if 'enabled' in data:
@@ -818,43 +919,49 @@ def autotrade_toggle():
         else:
             autotrade_state['enabled'] = not autotrade_state['enabled']
         is_on = autotrade_state['enabled']
-    return jsonify({'status': 'success', 'enabled': is_on, 'message': 'التداول الآلي نشط 🟢' if is_on else 'التداول الآلي متوقف 🔴'})
+
+    msg = 'تم تفعيل التداول الآلي بنجاح 🟢' if is_on else 'تم إيقاف التداول الآلي ⏸️'
+    log_audit_event("AUTOTRADE_TOGGLE", "SYSTEM", None, msg)
+    return jsonify({'status': 'success', 'enabled': is_on, 'message': msg})
+
+@app.route('/api/autotrade/config', methods=['POST'])
+def autotrade_post_config():
+    data = request.json or {}
+    with autotrade_lock:
+        cfg = autotrade_state['risk_config']
+        if 'risk_percent' in data: cfg['risk_percent'] = float(data['risk_percent'])
+        if 'max_lot_cap' in data: cfg['max_lot_cap'] = float(data['max_lot_cap'])
+        if 'max_open_trades' in data: cfg['max_open_trades'] = int(data['max_open_trades'])
+        if 'max_daily_trades' in data: cfg['max_daily_trades'] = int(data['max_daily_trades'])
+        if 'max_daily_loss_pct' in data: cfg['max_daily_loss_pct'] = float(data['max_daily_loss_pct'])
+        if 'min_score' in data: cfg['min_score'] = int(data['min_score'])
+        if 'auto_breakeven' in data: cfg['auto_breakeven'] = bool(data['auto_breakeven'])
+        if 'trailing_stop_enabled' in data: cfg['trailing_stop_enabled'] = bool(data['trailing_stop_enabled'])
+
+    log_audit_event("CONFIG_UPDATED", "SYSTEM", None, "تم تحديث قواعد إدارة المخاطر وسقف اللوت")
+    return jsonify({'status': 'success', 'config': autotrade_state['risk_config']})
 
 @app.route('/api/autotrade/execute', methods=['POST'])
-def autotrade_execute():
+def autotrade_post_execute():
     data = request.json or {}
-    symbol = data.get('symbol')
-    trade_type = data.get('type', 'BUY').upper()
-    entry = float(data.get('entry', 0))
-    sl = float(data.get('sl', 0))
-    tp1 = float(data.get('tp1', 0))
-    tp2 = float(data.get('tp2', 0))
-    tp3 = float(data.get('tp3', 0))
-    score = int(data.get('score', 80))
+    with execution_mutex:
+        passed, code, result = validate_trade_risk(data)
+        if not passed:
+            log_audit_event("TRADE_REJECTED", data.get('symbol'), None, f"رفض الصفقة: {result} (كود: {code})")
+            return jsonify({'status': 'rejected', 'code': code, 'message': result}), 400
 
-    if not symbol or entry <= 0:
-        return jsonify({'status': 'error', 'message': 'بيانات الصفقة غير صالحة'})
-
-    with autotrade_lock:
-        if not autotrade_state['enabled']:
-            return jsonify({'status': 'ignored', 'message': 'التداول الآلي متوقف حالياً'})
-
-        cfg = autotrade_state['risk_config']
-        if score < cfg['min_score']:
-            return jsonify({'status': 'ignored', 'message': f'نقاط التوافق ({score}) أقل من الحد الأدنى المطلوب للتنفيذ ({cfg["min_score"]})'})
-
-        if len(autotrade_state['open_positions']) >= cfg['max_open_trades']:
-            return jsonify({'status': 'ignored', 'message': 'تم الوصول للحد الأقصى لعدد الصفقات المفتوحة'})
-
-        # Prevent duplicate trade on same symbol
-        for pos in autotrade_state['open_positions']:
-            if pos['symbol'] == symbol:
-                return jsonify({'status': 'ignored', 'message': f'توجد صفقة مفتوحة مسبقاً على {symbol}'})
-
-        # Calculate exact lot
-        lot = calculate_auto_lot(symbol, entry, sl, autotrade_state['account']['balance'], cfg['risk_percent'], cfg['max_lot_cap'])
-
+        symbol = data['symbol'].upper()
+        trade_type = data['type'].upper()
+        entry = float(data['entry'])
+        sl = float(data['sl'])
+        tp1 = float(data['tp1'])
+        tp2 = float(data.get('tp2', 0))
+        tp3 = float(data.get('tp3', 0))
+        score = int(data.get('score', 80))
+        lot = result['lot']
+        signal_id = result['signal_id']
         ticket_id = f"T-{int(time.time()*1000)%1000000}"
+
         new_pos = {
             'ticket': ticket_id,
             'symbol': symbol,
@@ -869,123 +976,195 @@ def autotrade_execute():
             'score': score,
             'pnl': 0.0,
             'tp1_hit': False,
+            'tp2_hit': False,
+            'signal_id': signal_id,
             'open_time': time.strftime('%H:%M:%S'),
             'status': 'OPEN',
-            'notes': f'تنفيذ آلي (مخاطرة {cfg["risk_percent"]}%)'
+            'notes': f'تنفيذ آلي مؤكد (مخاطرة {autotrade_state["risk_config"]["risk_percent"]}%)'
         }
-        autotrade_state['open_positions'].append(new_pos)
 
-    global autotrade_command_queue
-    autotrade_command_queue.append({
-        'action': 'OPEN',
-        'ticket': ticket_id,
-        'symbol': symbol,
-        'type': trade_type,
-        'lot': lot,
-        'entry': entry,
-        'sl': sl,
-        'tp1': tp1,
-        'tp2': tp2,
-        'tp3': tp3
-    })
-    print(f"[AUTOTRADE ORDER EXECUTED & QUEUED TO EA] {trade_type} {symbol} | Lot: {lot} | Entry: {entry} | SL: {sl} | TP1: {tp1}")
-    return jsonify({
-        'status': 'success',
-        'message': f'تم فتح صفقة {trade_type} على {symbol} بنجاح بحجم {lot} لوت ✅',
-        'position': new_pos
-    })
+        with autotrade_lock:
+            autotrade_state['open_positions'].append(new_pos)
+            autotrade_state['daily_stats']['trades_opened'] += 1
+            global autotrade_command_queue
+            autotrade_command_queue.append({
+                'action': 'OPEN',
+                'ticket': ticket_id,
+                'symbol': symbol,
+                'type': trade_type,
+                'lot': lot,
+                'entry': entry,
+                'sl': sl,
+                'tp1': tp1,
+                'tp2': tp2,
+                'tp3': tp3,
+                'signal_id': signal_id
+            })
+
+        log_audit_event("ORDER_APPROVED_AND_QUEUED", symbol, ticket_id, f"تم اعتماد فتح صفقة {trade_type} بحجم {lot} لوت ووقف {sl} وهدف {tp1}")
+        return jsonify({
+            'status': 'success',
+            'message': f'تم إرسال أمر فتح صفقة {trade_type} على {symbol} بحجم {lot} لوت بنجاح ✅',
+            'position': new_pos
+        })
 
 @app.route('/api/autotrade/close', methods=['POST'])
-def autotrade_close_manual():
+def autotrade_post_close():
     data = request.json or {}
-    ticket = data.get('ticket')
+    ticket = str(data.get('ticket', ''))
 
     with autotrade_lock:
-        target_pos = None
-        for pos in autotrade_state['open_positions']:
-            if pos['ticket'] == ticket:
-                target_pos = pos
+        target = None
+        for p in autotrade_state['open_positions']:
+            if str(p['ticket']) == ticket:
+                target = p
                 break
 
-        if not target_pos:
-            return jsonify({'status': 'error', 'message': 'الصفقة غير موجودة أو مغلقة مسبقاً'})
+        if not target:
+            return jsonify({'status': 'error', 'message': 'الصفقة غير موجودة أو مغلقة مسبقاً'}), 404
 
-        autotrade_state['open_positions'].remove(target_pos)
-        autotrade_state['account']['balance'] += target_pos['pnl']
+        autotrade_state['open_positions'].remove(target)
+        autotrade_state['account']['balance'] += target['pnl']
         autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
-        target_pos['status'] = 'CLOSED_MANUAL'
+        autotrade_state['daily_stats']['realized_pnl'] += target['pnl']
+        target['status'] = 'CLOSED_MANUAL'
+        target['close_time'] = time.strftime('%H:%M:%S')
+        autotrade_state['history'].insert(0, target)
+
         global autotrade_command_queue
         autotrade_command_queue.append({
             'action': 'CLOSE',
-            'ticket': ticket
+            'ticket': ticket,
+            'symbol': target['symbol']
         })
-        target_pos['close_time'] = time.strftime('%H:%M:%S')
-        autotrade_state['history'].insert(0, target_pos)
 
-    return jsonify({'status': 'success', 'message': f'تم إغلاق الصفقة #{ticket} بنجاح', 'pnl': target_pos['pnl']})
+    log_audit_event("MANUAL_CLOSE", target['symbol'], ticket, f"تم إغلاق الصفقة يدوياً (الربح/الخسارة: ${target['pnl']:.2f})")
+    return jsonify({'status': 'success', 'message': f'تم إغلاق الصفقة #{ticket} بنجاح', 'pnl': target['pnl']})
 
+@app.route('/api/autotrade/close-all', methods=['POST'])
+def autotrade_post_close_all():
+    with autotrade_lock:
+        closed_count = len(autotrade_state['open_positions'])
+        for p in list(autotrade_state['open_positions']):
+            autotrade_state['open_positions'].remove(p)
+            autotrade_state['account']['balance'] += p['pnl']
+            autotrade_state['daily_stats']['realized_pnl'] += p['pnl']
+            p['status'] = 'CLOSED_ALL'
+            p['close_time'] = time.strftime('%H:%M:%S')
+            autotrade_state['history'].insert(0, p)
+            global autotrade_command_queue
+            autotrade_command_queue.append({
+                'action': 'CLOSE',
+                'ticket': p['ticket'],
+                'symbol': p['symbol']
+            })
 
+    log_audit_event("CLOSE_ALL_POSITIONS", "ALL", None, f"تم إغلاق جميع الصفقات المفتوحة ({closed_count} صفقة)")
+    return jsonify({'status': 'success', 'message': f'تم إغلاق جميع الصفقات المفتوحة ({closed_count}) بنجاح'})
+
+@app.route('/api/autotrade/emergency-stop', methods=['POST'])
+def autotrade_post_emergency_stop():
+    data = request.json or {}
+    reason = data.get('reason', 'تم تفعيل زر الطوارئ من قبل المتداول')
+    with autotrade_lock:
+        autotrade_state['enabled'] = False
+        autotrade_state['emergency_stop'] = True
+        autotrade_state['emergency_reason'] = reason
+
+    log_audit_event("EMERGENCY_STOP_TRIGGERED", "SYSTEM", None, reason)
+    return jsonify({'status': 'success', 'message': f'🚨 تم تفعيل نظام الطوارئ وإيقاف جميع عمليات التداول: {reason}'})
+
+@app.route('/api/autotrade/positions', methods=['GET'])
+def autotrade_get_positions():
+    with autotrade_lock:
+        return jsonify({'status': 'success', 'positions': autotrade_state['open_positions']})
+
+@app.route('/api/autotrade/history', methods=['GET'])
+def autotrade_get_history():
+    with autotrade_lock:
+        return jsonify({'status': 'success', 'history': autotrade_state['history'][:30]})
+
+@app.route('/api/autotrade/account', methods=['GET'])
+def autotrade_get_account():
+    with autotrade_lock:
+        return jsonify({'status': 'success', 'account': autotrade_state['account']})
+
+@app.route('/api/autotrade/health', methods=['GET'])
+def autotrade_get_health():
+    with autotrade_lock:
+        now = time.time()
+        hb = autotrade_state['account']['last_heartbeat']
+        is_fresh = (now - hb) < 10.0 if hb > 0 else False
+        return jsonify({
+            'status': 'ok' if is_fresh else 'degraded',
+            'broker_connected': autotrade_state['account']['connected'],
+            'heartbeat_fresh': is_fresh,
+            'heartbeat_age_sec': round(now - hb, 1) if hb > 0 else None,
+            'latency_ms': autotrade_state['account']['latency_ms'],
+            'server_time': time.strftime('%Y-%m-%d %H:%M:%S')
+        })
+
+@app.route('/api/autotrade/audit-logs', methods=['GET'])
+def autotrade_get_audit_logs():
+    with autotrade_lock:
+        return jsonify({'status': 'success', 'logs': audit_logs[:50]})
 
 # ==========================================================================
-
+# AUTHENTICATED EA WEBHOOK DIRECT BRIDGE (/api/mt5/sync)
 # ==========================================================================
-# JUSTMARKETS & MULTI-BROKER HEADLESS VPS CONNECTOR
-# ==========================================================================
-def launch_vps_mt5_terminal(login, password, server):
-    """Launches and authenticates MetaTrader 5 in the background on the Linux VPS."""
-    import subprocess
-    import os
-    try:
-        wine_terminal = os.path.expanduser("~/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe")
-        if os.path.exists(wine_terminal):
-            cmd = f'DISPLAY=:0 nohup wine "{wine_terminal}" /login:{login} /password:{password} /server:{server} /portable > /dev/null 2>&1 &'
-            subprocess.Popen(cmd, shell=True)
-            print(f"[VPS MT5 CONNECTOR] Started background MT5 terminal for {server} #{login}")
-            return True
-    except Exception as e:
-        print(f"[VPS MT5 CONNECTOR ERROR] {e}")
-    return False
-
-# DUAL-CHANNEL REAL-TIME METATRADER BRIDGE (EA WEBHOOK & CLOUD BRIDGE)
-# ==========================================================================
-autotrade_command_queue = []
-
 @app.route('/api/mt5/sync', methods=['POST'])
 def mt5_ea_sync():
-    """High-Speed Real-Time Sync Endpoint called by MarketPulse_Bridge.mq5 every second."""
+    """Protected Bi-Directional Real-Time Webhook called by MarketPulse_Bridge.mq5 every second."""
     data = request.json or {}
+    
+    # 1. Header or payload secret authentication check
+    auth_secret = request.headers.get('X-MarketPulse-Secret') or data.get('secret', '')
+    if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
+        return jsonify({'status': 'unauthorized', 'message': 'Invalid Webhook Secret Key'}), 401
+
     login = str(data.get('login', ''))
     server_name = str(data.get('server', ''))
+    currency = str(data.get('currency', 'USD'))
     balance = float(data.get('balance', 0))
     equity = float(data.get('equity', 0))
-    margin = float(data.get('free_margin', 0))
+    margin = float(data.get('margin', 0))
+    free_margin = float(data.get('free_margin', 0))
     positions = data.get('positions', [])
+    now = time.time()
 
     with autotrade_lock:
-        if balance > 0:
-            autotrade_state['account']['balance'] = round(balance, 2)
-            autotrade_state['account']['equity'] = round(equity if equity > 0 else balance, 2)
-            autotrade_state['account']['free_margin'] = round(margin if margin > 0 else balance, 2)
-            if login: autotrade_state['account']['login'] = login
-            if server_name: autotrade_state['account']['server'] = server_name
-            autotrade_state['account']['connected'] = True
-        if login and password:
-            launch_vps_mt5_terminal(login, password, server)
-            autotrade_state['account']['bridge_mode'] = 'EA_WEBHOOK_LIVE'
-            autotrade_state['account']['last_sync_time'] = time.strftime('%H:%M:%S')
+        acc = autotrade_state['account']
+        acc['connected'] = True
+        acc['bridge_mode'] = 'EA_WEBHOOK_LIVE'
+        acc['last_heartbeat'] = now
+        acc['last_sync_time'] = time.strftime('%H:%M:%S')
+        if login: acc['login'] = login
+        if server_name: acc['server'] = server_name
+        if currency: acc['currency'] = currency
 
-        # Sync real open positions from MetaTrader terminal
-        if isinstance(positions, list) and len(positions) > 0:
+        if balance > 0:
+            acc['balance'] = round(balance, 2)
+            acc['equity'] = round(equity if equity > 0 else balance, 2)
+            acc['margin'] = round(margin, 2)
+            acc['free_margin'] = round(free_margin if free_margin > 0 else balance, 2)
+            if acc['margin'] > 0:
+                acc['margin_level'] = round((acc['equity'] / acc['margin']) * 100, 2)
+            else:
+                acc['margin_level'] = 0.0
+
+        # Sync real open positions if reported by MT5 terminal
+        if isinstance(positions, list):
+            # Update current_price and pnl from EA
             autotrade_state['open_positions'] = positions
 
-        # Dispatch pending commands to the EA
+        # Dispatch pending command queue
         global autotrade_command_queue
         commands_to_send = list(autotrade_command_queue)
         autotrade_command_queue = []
 
     return jsonify({
         'status': 'success',
-        'timestamp': time.time(),
+        'timestamp': now,
         'commands': commands_to_send
     })
 
@@ -1006,5 +1185,5 @@ def mt5_download_ea():
 
 
 if __name__ == '__main__':
-    print(f"MarketPulse FX TradingView Server running on http://0.0.0.0:2200")
+    print("MarketPulse FX Institutional Server running on http://0.0.0.0:2200")
     app.run(host='0.0.0.0', port=2200, debug=False)
