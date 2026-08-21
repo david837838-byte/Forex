@@ -2774,8 +2774,8 @@ Evaluate objectively. Return ONLY valid JSON:
     // AUTOTRADE REAL CLIENT & METATRADER 5 BRIDGE CONTROLLER (v28)
     // ============================================================
     const AutoTrade = {
-        apiBase: (window.location.protocol.startsWith('http') && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
-                 ? `${window.location.protocol}//${window.location.hostname}:2200`
+        apiBase: (window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
+                 ? `http://${window.location.hostname}:2200`
                  : 'http://187.77.174.215:2200',
 
         state: {
