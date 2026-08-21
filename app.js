@@ -2859,7 +2859,18 @@ Evaluate objectively. Return ONLY valid JSON:
                     }
                 }
 
-                this.renderUI();
+                
+            // 7. Auto-populate Connection Form Fields if not actively focused
+            const serverInput = document.getElementById('at-server-name');
+            const loginInput = document.getElementById('at-login-num');
+            if (serverInput && acc.server && !serverInput.matches(':focus')) {
+                serverInput.value = acc.server;
+            }
+            if (loginInput && acc.login && !loginInput.matches(':focus')) {
+                loginInput.value = acc.login;
+            }
+
+            this.renderUI();
             } catch (e) {
                 this.state.account.connected = false;
                 this.renderUI();
