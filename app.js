@@ -3133,28 +3133,60 @@ Evaluate objectively. Return ONLY valid JSON:
         },
 
         async connectAccount() {
+            const btn = document.getElementById('save-at-connect-btn');
+            const origHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> جاري حفظ ومزامنة الاتصال بالسيرفر...';
+            }
+
             try {
                 const server = document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
-                const login = document.getElementById('at-login-num')?.value.trim() || '';
+                const login = document.getElementById('at-login-num')?.value.trim() || '2001944351';
                 const password = document.getElementById('at-password')?.value || '';
                 const mode = document.getElementById('at-trading-mode')?.value || 'demo';
 
+                // Save locally so it never resets on page refresh
+                localStorage.setItem('mp_at_server', server);
+                localStorage.setItem('mp_at_login', login);
+                localStorage.setItem('mp_at_mode', mode);
+
                 if (mode === 'real') {
-                    if (!confirm('⚠️ تحذير أمني: أنت على وشك تفعيل التداول على حساب حقيقي (LIVE REAL). هل تريد المتابعة؟')) return;
+                    if (!confirm('⚠️ تحذير أمني: أنت على وشك تفعيل التداول على حساب حقيقي (LIVE REAL). هل تريد المتابعة؟')) {
+                        if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
+                        return;
+                    }
                 }
+
+                const ctrl = new AbortController();
+                const timeoutId = setTimeout(() => ctrl.abort(), 6000);
 
                 const res = await fetch(`${this.apiBase}/api/autotrade/connect`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ server, login, password, mode })
+                    body: JSON.stringify({ server, login, password, mode }),
+                    signal: ctrl.signal
                 });
+                clearTimeout(timeoutId);
+
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert(data.message);
+                    alert('✅ ' + data.message);
                     this.syncStatus();
+                } else {
+                    alert('⚠️ تنبيه: ' + (data.message || 'حدث خطأ غير متوقع'));
                 }
             } catch (e) {
-                alert('فشل حفظ إعدادات الاتصال: ' + e.message);
+                if (e.name === 'AbortError' || e.message.includes('fetch')) {
+                    alert('⚠️ تم حفظ بيانات الحساب في المتصفح بنجاح!\n\n💡 ملاحظة: جاري محاولة الوصول لسيرفر الباك إند (' + this.apiBase + '). تأكد من تشغيل أمر السيرفر على الـ VPS لبدء تدفق الأرقام الحية.');
+                } else {
+                    alert('فشل حفظ إعدادات الاتصال: ' + e.message);
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = origHtml;
+                }
             }
         },
 
@@ -3189,6 +3221,14 @@ Evaluate objectively. Return ONLY valid JSON:
         },
 
         init() {
+            // Restore saved credentials from localStorage
+            const savedServer = localStorage.getItem('mp_at_server');
+            const savedLogin = localStorage.getItem('mp_at_login');
+            const savedMode = localStorage.getItem('mp_at_mode');
+            if (savedServer && document.getElementById('at-server-name')) document.getElementById('at-server-name').value = savedServer;
+            if (savedLogin && document.getElementById('at-login-num')) document.getElementById('at-login-num').value = savedLogin;
+            if (savedMode && document.getElementById('at-trading-mode')) document.getElementById('at-trading-mode').value = savedMode;
+
             // 1. Modal Open / Close Triggers
             const modal = document.getElementById('autotrade-modal');
             const overlay = document.getElementById('autotrade-modal-overlay');
