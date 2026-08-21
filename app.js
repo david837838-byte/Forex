@@ -2817,11 +2817,15 @@ Evaluate objectively. Return ONLY valid JSON:
 
         async syncStatus() {
             try {
+                const savedLogin = localStorage.getItem('mp_at_login') || document.getElementById('at-login-num')?.value.trim() || '';
+                const queryParam = savedLogin ? `?login=${encodeURIComponent(savedLogin)}` : '';
+                const headers = savedLogin ? { 'X-Account-Login': savedLogin } : {};
+
                 const [statusRes, posRes, histRes, logsRes] = await Promise.all([
-                    fetch(`${this.apiBase}/api/autotrade/status`),
-                    fetch(`${this.apiBase}/api/autotrade/positions`),
-                    fetch(`${this.apiBase}/api/autotrade/history`),
-                    fetch(`${this.apiBase}/api/autotrade/audit-logs`)
+                    fetch(`${this.apiBase}/api/autotrade/status${queryParam}`, { headers }),
+                    fetch(`${this.apiBase}/api/autotrade/positions${queryParam}`, { headers }),
+                    fetch(`${this.apiBase}/api/autotrade/history${queryParam}`, { headers }),
+                    fetch(`${this.apiBase}/api/autotrade/audit-logs${queryParam}`, { headers })
                 ]);
 
                 if (statusRes.ok) {
@@ -3130,6 +3134,22 @@ Evaluate objectively. Return ONLY valid JSON:
             } catch (e) {
                 alert('فشل حفظ الإعدادات: ' + e.message);
             }
+        },
+
+        
+        disconnectAccount() {
+            if (!confirm('هل تريد تسجيل الخروج وفصل هذا الحساب من هذا الجهاز؟')) return;
+            localStorage.removeItem('mp_at_server');
+            localStorage.removeItem('mp_at_login');
+            localStorage.removeItem('mp_at_mode');
+            if (document.getElementById('at-server-name')) document.getElementById('at-server-name').value = '';
+            if (document.getElementById('at-login-num')) document.getElementById('at-login-num').value = '';
+            if (document.getElementById('at-password')) document.getElementById('at-password').value = '';
+            this.state.account.connected = false;
+            this.state.account.balance = 0.0;
+            this.state.open_positions = [];
+            this.renderUI();
+            alert('✅ تم مسح بيانات الحساب وتسجيل الخروج من هذا الجهاز بنجاح.');
         },
 
         async connectAccount() {

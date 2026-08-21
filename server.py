@@ -1,3 +1,46 @@
+
+# ============================================================
+# MULTI-TENANT ACCOUNT ISOLATION ENGINE
+# ============================================================
+user_accounts_store = {}
+
+def get_or_create_user_account(login_str, server_name="JustMarkets-Demo"):
+    login_key = str(login_str).strip() if login_str else ""
+    if not login_key:
+        return autotrade_state
+    
+    if login_key not in user_accounts_store:
+        user_accounts_store[login_key] = {
+            'enabled': False,
+            'mode': 'demo',
+            'emergency_stop': False,
+            'emergency_reason': '',
+            'account': {
+                'connected': False,
+                'mt5_connected': False,
+                'ea_connected': False,
+                'broker_connected': False,
+                'bridge_mode': 'EA_WEBHOOK_LIVE',
+                'server': server_name,
+                'login': login_key,
+                'currency': 'USD',
+                'balance': 0.0,
+                'equity': 0.0,
+                'margin': 0.0,
+                'free_margin': 0.0,
+                'margin_level': 0.0,
+                'last_heartbeat': 0.0,
+                'last_sync_time': '',
+                'latency_ms': 0.0
+            },
+            'risk_config': copy.deepcopy(autotrade_state['risk_config']),
+            'daily_stats': copy.deepcopy(autotrade_state['daily_stats']),
+            'open_positions': [],
+            'history': [],
+            'audit_logs': []
+        }
+    return user_accounts_store[login_key]
+
 """
 ==========================================================================
 MARKETPULSE FX — EXCLUSIVE TRADINGVIEW REAL-TIME BACKEND SERVER
@@ -1240,6 +1283,23 @@ def mt5_ea_sync():
         acc['last_sync_time'] = time.strftime('%H:%M:%S')
         if login: acc['login'] = login
         if server_name: acc['server'] = server_name
+        
+        # Multi-Tenant isolation update
+        u_state = get_or_create_user_account(login, server_name)
+        u_acc = u_state['account']
+        u_acc['connected'] = True
+        u_acc['last_heartbeat'] = now
+        u_acc['last_sync_time'] = time.strftime('%H:%M:%S')
+        u_acc['balance'] = round(balance, 2) if balance > 0 else u_acc['balance']
+        u_acc['equity'] = round(equity, 2) if equity > 0 else u_acc['balance']
+        u_acc['margin'] = round(margin, 2)
+        u_acc['free_margin'] = round(free_margin, 2) if free_margin > 0 else u_acc['balance']
+        u_acc['margin_level'] = round((u_acc['equity'] / u_acc['margin']) * 100, 2) if u_acc['margin'] > 0 else 0.0
+        u_acc['server'] = server_name
+        u_acc['login'] = login
+        u_acc['currency'] = currency
+        if isinstance(positions, list):
+            u_state['open_positions'] = positions
         if currency: acc['currency'] = currency
 
         if balance > 0:
@@ -1272,9 +1332,29 @@ def mt5_ea_sync():
 # ==========================================================================
 @app.route('/api/autotrade/status', methods=['GET'])
 def autotrade_get_status():
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login')
+    with autotrade_lock:
+        target_state = get_or_create_user_account(req_login) if req_login else autotrade_state
+        now = time.time()
+        hb = target_state['account']['last_heartbeat']
+        is_fresh = (now - hb) < 10.0 if hb > 0 else False
+        return jsonify({
+            'status': 'success',
+            'enabled': target_state['enabled'],
+            'mode': target_state['mode'],
+            'emergency_stop': target_state['emergency_stop'],
+            'emergency_reason': target_state['emergency_reason'],
+            'is_heartbeat_fresh': is_fresh,
+            'account': target_state['account'],
+            'risk_config': target_state['risk_config'],
+            'daily_stats': target_state['daily_stats'],
+            'open_positions_count': len(target_state['open_positions']),
+            'history_count': len(target_state['history'])
+        })
+def _old_unused_status():
     with autotrade_lock:
         now = time.time()
-        is_fresh = (now - autotrade_state['account']['last_heartbeat']) < 10.0 if autotrade_state['account']['last_heartbeat'] > 0 else False
+        is_fresh = False
         return jsonify({
             'status': 'success',
             'enabled': autotrade_state['enabled'],
@@ -1296,8 +1376,10 @@ def autotrade_get_account():
 
 @app.route('/api/autotrade/positions', methods=['GET'])
 def autotrade_get_positions():
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login')
     with autotrade_lock:
-        return jsonify({'status': 'success', 'positions': autotrade_state['open_positions']})
+        target_state = get_or_create_user_account(req_login) if req_login else autotrade_state
+        return jsonify({'status': 'success', 'positions': target_state['open_positions']})
 
 @app.route('/api/autotrade/history', methods=['GET'])
 def autotrade_get_history():
