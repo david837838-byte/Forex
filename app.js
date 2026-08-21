@@ -497,6 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
         cache: {},
         async analyze(assetKey, ta, macSum) {
             const key = state.aiConfig.geminiKey;
+            if (!key || key.trim() === '') return null;
             const model = state.aiConfig.geminiModel || 'gemini-1.5-flash';
             if (!key) return null;
             
