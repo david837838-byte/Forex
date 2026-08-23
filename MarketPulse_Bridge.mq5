@@ -192,11 +192,17 @@ void OnTimer()
    long   login   = AccountInfoInteger(ACCOUNT_LOGIN);
    string server  = AccountInfoString(ACCOUNT_SERVER);
    string curr    = AccountInfoString(ACCOUNT_CURRENCY);
+   long   leverage= AccountInfoInteger(ACCOUNT_LEVERAGE);
+   long   accMode = AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   
+   string modeStr = "REAL";
+   if(accMode == ACCOUNT_TRADE_MODE_DEMO) modeStr = "DEMO";
+   else if(accMode == ACCOUNT_TRADE_MODE_CONTEST) modeStr = "CONTEST";
    
    string positionsJson = GetOpenPositionsJSON();
    
-   string payload = StringFormat("{\"secret\":\"%s\",\"login\":%I64d,\"server\":\"%s\",\"currency\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"positions\":%s}",
-                                 SecretKey, login, server, curr, balance, equity, margin, freeMar, positionsJson);
+   string payload = StringFormat("{\"secret\":\"%s\",\"login\":%I64d,\"server\":\"%s\",\"currency\":\"%s\",\"account_type\":\"%s\",\"leverage\":%I64d,\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"positions\":%s}",
+                                 SecretKey, login, server, curr, modeStr, leverage, balance, equity, margin, freeMar, positionsJson);
    
    char postData[];
    char resultData[];

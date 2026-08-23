@@ -579,52 +579,32 @@ audit_logs = []         # Chronological audit log buffer (max 200 items)
 # ============================================================
 user_accounts_store = {}
 
-def get_or_create_user_account(login_str=None, server_name="JustMarkets-Demo"):
+def get_or_create_user_account(login_str=None, server_name=""):
     login_key = str(login_str).strip() if login_str else ""
+    server_key = str(server_name).strip() if server_name else "JustMarkets-Demo"
     
-    # If no login provided, check if there is an active account in store
+    # 1. Enforce strict isolation key: ServerName_Login
+    isolation_key = f"{server_key}_{login_key}"
+    
+    # If no specific login requested, fallback to default global state ONLY for anonymous visitors 
     if not login_key:
-        if user_accounts_store:
-            # Pick the most recently active account
-            active_keys = sorted(user_accounts_store.keys(), 
-                                 key=lambda k: user_accounts_store[k]['account'].get('last_heartbeat', 0), 
-                                 reverse=True)
-            if active_keys:
-                login_key = active_keys[0]
-        if not login_key:
-            return autotrade_state
+        return autotrade_state
     
-    if login_key not in user_accounts_store:
-        user_accounts_store[login_key] = {
-            'enabled': True,
-            'mode': 'demo',
-            'emergency_stop': False,
-            'emergency_reason': '',
-            'account': {
-                'connected': True,
-                'mt5_connected': True,
-                'ea_connected': True,
-                'broker_connected': True,
-                'bridge_mode': 'EA_WEBHOOK_LIVE',
-                'server': server_name,
-                'login': login_key,
-                'currency': 'USD',
-                'balance': float(autotrade_state['account'].get('balance', 0.0)),
-                'equity': float(autotrade_state['account'].get('equity', 0.0)),
-                'margin': float(autotrade_state['account'].get('margin', 0.0)),
-                'free_margin': float(autotrade_state['account'].get('free_margin', 0.0)),
-                'margin_level': float(autotrade_state['account'].get('margin_level', 0.0)),
-                'last_heartbeat': time.time(),
-                'last_sync_time': time.strftime('%H:%M:%S'),
-                'latency_ms': 12.0
-            },
-            'risk_config': copy.deepcopy(autotrade_state['risk_config']),
-            'daily_stats': copy.deepcopy(autotrade_state['daily_stats']),
-            'open_positions': copy.deepcopy(autotrade_state['open_positions']),
-            'history': copy.deepcopy(autotrade_state['history']),
-            'audit_logs': copy.deepcopy(audit_logs)
-        }
-    return user_accounts_store[login_key]
+    if isolation_key not in user_accounts_store:
+        import copy
+        user_accounts_store[isolation_key] = copy.deepcopy(autotrade_state)
+        u_acc = user_accounts_store[isolation_key]['account']
+        u_acc['login'] = login_key
+        u_acc['server'] = server_key
+        u_acc['connected'] = False
+        u_acc['balance'] = 0.0
+        u_acc['equity'] = 0.0
+        u_acc['margin'] = 0.0
+        u_acc['free_margin'] = 0.0
+        user_accounts_store[isolation_key]['open_positions'] = []
+        user_accounts_store[isolation_key]['history'] = []
+        
+    return user_accounts_store[isolation_key]
 
 
 def log_audit_event(event_type, symbol, ticket, reason, details=None):
@@ -666,8 +646,27 @@ CONTRACT_SPECS = {
     'AAPL':   { 'size': 10.0,    'category': 'stocks', 'point': 0.01,  'tick_val': 0.10 }
 }
 
-def get_symbol_spec(symbol):
+
+BROKER_SYMBOL_MAPPING = {
+    'XAUUSD': 'XAUUSD',   # Standard
+    # Example configurations:
+    # 'XAUUSD': 'XAUUSDm', # Exness Mini
+    # 'XAUUSD': 'GOLD',    # Other brokers
+}
+
+def map_symbol_to_broker(symbol):
     sym = symbol.upper()
+    return BROKER_SYMBOL_MAPPING.get(sym, sym)
+
+def map_symbol_from_broker(broker_symbol):
+    for k, v in BROKER_SYMBOL_MAPPING.items():
+        if v.upper() == broker_symbol.upper():
+            return k
+    return broker_symbol.upper()
+
+def get_symbol_spec(symbol):
+    sym = map_symbol_to_broker(symbol).upper()
+
     if sym in CONTRACT_SPECS:
         return CONTRACT_SPECS[sym]
     return { 'size': 100000.0, 'category': 'forex', 'point': 0.0001 if 'JPY' not in sym else 0.01, 'tick_val': 10.0 }
@@ -689,7 +688,7 @@ def calculate_risk_position_size(symbol, entry_price, sl_price, balance, risk_pe
 # ==========================================================================
 # RECONCILIATION ENGINE (MT5 = Single Source of Truth)
 # ==========================================================================
-def reconcile_positions_with_mt5(mt5_positions, mt5_account_data=None):
+def reconcile_positions_with_mt5(mt5_positions, target_state, mt5_account_data=None):
     """
     Continuous bi-directional reconciliation treating MT5 as absolute Source of Truth.
     - Synchronizes open positions and discovers manual trades seamlessly.
@@ -701,7 +700,7 @@ def reconcile_positions_with_mt5(mt5_positions, mt5_account_data=None):
 
     now = time.time()
     with autotrade_lock:
-        current_db_positions = {str(p.get('ticket')): p for p in autotrade_state['open_positions'] if p.get('ticket')}
+        current_db_positions = {str(p.get('ticket')): p for p in target_state['open_positions'] if p.get('ticket')}
         mt5_tickets_seen = set()
         updated_open_positions = []
 
@@ -761,7 +760,7 @@ def reconcile_positions_with_mt5(mt5_positions, mt5_account_data=None):
                 autotrade_state['history'].insert(0, db_pos)
                 log_audit_event("RECONCILED_CLOSED_TRADE", db_pos['symbol'], ticket, f"تم تأكيد إغلاق الصفقة في MT5 ونقلها للأرشيف")
 
-        autotrade_state['open_positions'] = updated_open_positions
+        target_state['open_positions'] = updated_open_positions
         save_persisted_state()
 
 # ==========================================================================
@@ -894,7 +893,7 @@ def queue_trade_command(action_type, symbol, lot=0.0, entry=0.0, sl=0.0, tp1=0.0
     cmd = {
         'command_id': cmd_id,
         'action': action_type,
-        'symbol': symbol,
+        'symbol': map_symbol_to_broker(symbol),
         'type': 'BUY' if 'BUY' in action_type else ('SELL' if 'SELL' in action_type else action_type),
         'lot': lot,
         'entry': entry,
@@ -1281,6 +1280,8 @@ def mt5_ea_sync():
     login = str(data.get('login', ''))
     server_name = str(data.get('server', ''))
     currency = str(data.get('currency', 'USD'))
+    account_type = str(data.get('account_type', 'DEMO'))
+    leverage = int(data.get('leverage', 100))
     balance = float(data.get('balance', 0))
     equity = float(data.get('equity', 0))
     margin = float(data.get('margin', 0))
@@ -1289,53 +1290,37 @@ def mt5_ea_sync():
     now = time.time()
 
     with autotrade_lock:
-        acc = autotrade_state['account']
-        acc['connected'] = True
-        acc['mt5_connected'] = True
-        acc['ea_connected'] = True
-        acc['broker_connected'] = True
-        acc['bridge_mode'] = 'EA_WEBHOOK_LIVE'
-        acc['last_heartbeat'] = now
-        acc['last_account_sync'] = now
-        acc['last_position_sync'] = now
-        acc['last_sync_time'] = time.strftime('%H:%M:%S')
-        if login: acc['login'] = login
-        if server_name: acc['server'] = server_name
-        
-        # Multi-Tenant isolation update
         u_state = get_or_create_user_account(login, server_name)
         u_acc = u_state['account']
         u_acc['connected'] = True
+        u_acc['mt5_connected'] = True
+        u_acc['ea_connected'] = True
+        u_acc['broker_connected'] = True
+        u_acc['bridge_mode'] = 'EA_WEBHOOK_LIVE'
         u_acc['last_heartbeat'] = now
+        u_acc['last_account_sync'] = now
+        u_acc['last_position_sync'] = now
         u_acc['last_sync_time'] = time.strftime('%H:%M:%S')
-        u_acc['balance'] = round(balance, 2) if balance > 0 else u_acc['balance']
-        u_acc['equity'] = round(equity, 2) if equity > 0 else u_acc['balance']
+        u_acc['balance'] = round(balance, 2)
+        u_acc['equity'] = round(equity, 2)
         u_acc['margin'] = round(margin, 2)
-        u_acc['free_margin'] = round(free_margin, 2) if free_margin > 0 else u_acc['balance']
-        u_acc['margin_level'] = round((u_acc['equity'] / u_acc['margin']) * 100, 2) if u_acc['margin'] > 0 else 0.0
+        u_acc['free_margin'] = round(free_margin, 2)
+        u_acc['margin_level'] = round((equity / margin) * 100, 2) if margin > 0 else 0.0
         u_acc['server'] = server_name
         u_acc['login'] = login
         u_acc['currency'] = currency
+        u_acc['account_type'] = account_type
+        u_acc['leverage'] = leverage
+
         if isinstance(positions, list):
-            u_state['open_positions'] = positions
-        if currency: acc['currency'] = currency
+            reconcile_positions_with_mt5(positions, u_state)
+            u_acc['last_position_sync'] = now
 
-        if balance > 0:
-            acc['balance'] = round(balance, 2)
-            acc['equity'] = round(equity if equity > 0 else balance, 2)
-            acc['margin'] = round(margin, 2)
-            acc['free_margin'] = round(free_margin if free_margin > 0 else balance, 2)
-            acc['margin_level'] = round((acc['equity'] / acc['margin']) * 100, 2) if acc['margin'] > 0 else 0.0
-
-    # Reconcile positions with MT5
-    if isinstance(positions, list):
-        reconcile_positions_with_mt5(positions)
-
-    # Deliver pending non-expired commands
     commands_to_send = []
     with command_lock:
         for cid, cmd in commands_store.items():
             if cmd['status'] == 'QUEUED' and now <= cmd['expires_at']:
+                # Ensure we only send commands that match this user's account if we track account_id
                 cmd['status'] = 'SENT_TO_EA'
                 commands_to_send.append(cmd)
 
@@ -1437,19 +1422,21 @@ def autotrade_post_connect():
     mode = data.get('mode', 'demo')
 
     with autotrade_lock:
-        autotrade_state['mode'] = mode
-        autotrade_state['account']['server'] = server_name
-        if login: autotrade_state['account']['login'] = login
-        autotrade_state['emergency_stop'] = False
-        autotrade_state['emergency_reason'] = ''
+        u_state = get_or_create_user_account(login, server_name)
+        u_state['mode'] = mode
+        u_state['emergency_stop'] = False
+        u_state['emergency_reason'] = ''
+        
+        # We do NOT mark it connected here. We wait for MT5 heartbeat to truly mark it connected.
+        
         save_persisted_state()
 
-    log_audit_event("ACCOUNT_CONFIGURED", "SYSTEM", None, f"تم حفظ إعدادات حساب ({server_name} #{login} - وضع {mode.upper()})")
+    log_audit_event("ACCOUNT_CONFIGURED", "SYSTEM", None, f"تم حفظ إعدادات الاتصال للميتاتريدر ({server_name} #{login} - نمط {mode.upper()}) بانتظار إشارة EA")
     return jsonify({
         'status': 'success',
-        'message': f'تم حفظ وتجهيز إعدادات الاتصال بحساب ({server_name} #{login}) بنجاح 🟢',
+        'message': f'تم حفظ إعدادات الاتصال بانتظار اتصال EA ({server_name} #{login})',
         'webhook_secret': EA_WEBHOOK_SECRET,
-        'account': autotrade_state['account']
+        'account': u_state['account']
     })
 
 @app.route('/api/autotrade/toggle', methods=['POST'])
@@ -1497,11 +1484,15 @@ def autotrade_post_config():
 @app.route('/api/autotrade/execute', methods=['POST'])
 def autotrade_post_execute():
     data = request.json or {}
+    
+    # Extract login and server to support multi-account
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login')
+    
     with execution_mutex:
-        passed, code, result = validate_trade_risk(data)
+        passed, code_err, result = validate_trade_risk(data)
         if not passed:
-            log_audit_event("TRADE_REJECTED", data.get('symbol'), None, f"رفض الصفقة: {result} (كود: {code})")
-            return jsonify({'status': 'rejected', 'code': code, 'message': result}), 400
+            log_audit_event("TRADE_REJECTED", data.get('symbol'), None, f"رفض الصفقة: {result} (كود: {code_err})")
+            return jsonify({'status': 'rejected', 'code': code_err, 'message': result}), 400
 
         symbol = data['symbol'].upper()
         trade_type = data['type'].upper()
@@ -1513,42 +1504,20 @@ def autotrade_post_execute():
         score = int(data.get('score', 80))
         lot = result['lot']
         signal_id = result['signal_id']
-        temp_ticket = f"T-{int(time.time()*1000)%1000000}"
+        idem_key = result.get('idempotency_key', '')
 
-        new_pos = {
-            'ticket': temp_ticket,
-            'symbol': symbol,
-            'type': trade_type,
-            'lot': lot,
-            'entry': entry,
-            'current_price': entry,
-            'sl': sl,
-            'tp1': tp1,
-            'tp2': tp2,
-            'tp3': tp3,
-            'score': score,
-            'pnl': 0.0,
-            'tp1_hit': False,
-            'tp2_hit': False,
-            'signal_id': signal_id,
-            'open_time': time.strftime('%H:%M:%S'),
-            'status': 'PENDING_BROKER',
-            'notes': f'تنفيذ آلي مؤكد (مخاطرة {autotrade_state["risk_config"]["risk_percent"]}%)'
-        }
-
-        with autotrade_lock:
-            autotrade_state['open_positions'].append(new_pos)
-            autotrade_state['daily_stats']['trades_opened'] += 1
-            save_persisted_state()
-
-        # Queue persistent trade command
-        cmd = queue_trade_command(trade_type, symbol, lot=lot, entry=entry, sl=sl, tp1=tp1, tp2=tp2, tp3=tp3, ticket=temp_ticket, signal_id=signal_id)
-        log_audit_event("ORDER_APPROVED_AND_QUEUED", symbol, temp_ticket, f"تم إنشاء أمر {cmd['command_id']} ({trade_type} {lot} لوت)")
+        # Queue persistent trade command (do NOT create fake position)
+        cmd = queue_trade_command(trade_type, symbol, lot=lot, entry=entry, sl=sl, tp1=tp1, tp2=tp2, tp3=tp3, signal_id=signal_id)
+        
+        # Link command to account if necessary
+        if req_login:
+            cmd['login'] = req_login
+            
+        log_audit_event("ORDER_APPROVED_AND_QUEUED", symbol, None, f"تم إنشاء أمر {cmd['command_id']} ({trade_type} {lot} لوت)")
 
         return jsonify({
             'status': 'success',
-            'message': f'تم إرسال أمر فتح صفقة {trade_type} على {symbol} بحجم {lot} لوت بنجاح ✅',
-            'position': new_pos,
+            'message': f'تم إرسال أمر فتح صفقة {trade_type} على {symbol} بحجم {lot} لوت بنجاح وموجود في الطابور ⏳',
             'command': cmd
         })
 
@@ -1556,29 +1525,28 @@ def autotrade_post_execute():
 def autotrade_post_close():
     data = request.json or {}
     ticket = str(data.get('ticket', ''))
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login')
 
     with autotrade_lock:
+        target_state = get_or_create_user_account(req_login) if req_login else autotrade_state
         target = None
-        for p in autotrade_state['open_positions']:
+        for p in target_state['open_positions']:
             if str(p['ticket']) == ticket:
                 target = p
                 break
 
         if not target:
-            return jsonify({'status': 'error', 'message': 'الصفقة غير موجودة أو مغلقة مسبقاً'}), 404
+            return jsonify({'status': 'error', 'message': 'التيكت غير موجود في الصفقات المفتوحة'}), 404
 
-        autotrade_state['open_positions'].remove(target)
-        autotrade_state['account']['balance'] += target['pnl']
-        autotrade_state['account']['balance'] = round(autotrade_state['account']['balance'], 2)
-        autotrade_state['daily_stats']['realized_pnl'] += target['pnl']
-        target['status'] = 'CLOSED_MANUAL'
-        target['close_time'] = time.strftime('%H:%M:%S')
-        autotrade_state['history'].insert(0, target)
+        target['status'] = 'CLOSE_REQUESTED'
         save_persisted_state()
 
-    queue_trade_command('CLOSE', target['symbol'], ticket=ticket)
-    log_audit_event("MANUAL_CLOSE", target['symbol'], ticket, f"تم إغلاق الصفقة يدوياً (الربح/الخسارة: ${target['pnl']:.2f})")
-    return jsonify({'status': 'success', 'message': f'تم إغلاق الصفقة #{ticket} بنجاح', 'pnl': target['pnl']})
+    cmd = queue_trade_command('CLOSE', target['symbol'], ticket=ticket)
+    if req_login:
+        cmd['login'] = req_login
+        
+    log_audit_event("CLOSE_REQUESTED", target['symbol'], ticket, f"طلب إغلاق يدوي للصفقة #{ticket}")
+    return jsonify({'status': 'success', 'message': f'تم إرسال طلب إغلاق الصفقة #{ticket}', 'command': cmd})
 
 @app.route('/api/autotrade/close-all', methods=['POST'])
 def autotrade_post_close_all():
@@ -1645,8 +1613,13 @@ def mt5_download_ea():
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    origin = request.headers.get('Origin')
+    if origin and ('187.77.174.215' in origin or 'localhost' in origin or '127.0.0.1' in origin):
+        response.headers['Access-Control-Allow-Origin'] = origin
+    elif origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Account-Login, X-MarketPulse-Secret, X-User-Id'
     return response
 

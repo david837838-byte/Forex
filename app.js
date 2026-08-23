@@ -2819,8 +2819,9 @@ Evaluate objectively. Return ONLY valid JSON:
         async syncStatus() {
             try {
                 const savedLogin = localStorage.getItem('mp_at_login') || document.getElementById('at-login-num')?.value.trim() || '';
-                const queryParam = savedLogin ? `?login=${encodeURIComponent(savedLogin)}` : '';
-                const headers = savedLogin ? { 'X-Account-Login': savedLogin } : {};
+                const savedServer = localStorage.getItem('mp_at_server') || document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
+                const queryParam = savedLogin ? `?login=${encodeURIComponent(savedLogin)}&server=${encodeURIComponent(savedServer)}` : '';
+                const headers = savedLogin ? { 'X-Account-Login': savedLogin, 'X-Account-Server': savedServer } : {};
 
                 const [statusRes, posRes, histRes, logsRes] = await Promise.all([
                     fetch(`${this.apiBase}/api/autotrade/status${queryParam}`, { headers }),
@@ -3083,9 +3084,16 @@ Evaluate objectively. Return ONLY valid JSON:
             }
 
             try {
-                const res = await fetch(`${this.apiBase}/api/autotrade/emergency-stop`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                
+            const reqHeaders = { 'Content-Type': 'application/json' };
+            const savedLogin = localStorage.getItem('mp_at_login');
+            const savedServer = localStorage.getItem('mp_at_server');
+            if (savedLogin) reqHeaders['X-Account-Login'] = savedLogin;
+            if (savedServer) reqHeaders['X-Account-Server'] = savedServer;
+
+            const res = await fetch(`${this.apiBase}/api/autotrade/emergency-stop`, {
+                method: 'POST',
+                headers: reqHeaders,
                     body: JSON.stringify({ reason: 'تفعيل إغلاق الطوارئ الشامل المباشر من المتداول', close_all: true })
                 });
                 const data = await res.json();
@@ -3098,9 +3106,15 @@ Evaluate objectively. Return ONLY valid JSON:
 
         async closePosition(ticket) {
             try {
+                const headers = { 'Content-Type': 'application/json' };
+                const savedLogin = localStorage.getItem('mp_at_login');
+                const savedServer = localStorage.getItem('mp_at_server');
+                if (savedLogin) headers['X-Account-Login'] = savedLogin;
+                if (savedServer) headers['X-Account-Server'] = savedServer;
+
                 const res = await fetch(`${this.apiBase}/api/autotrade/close`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: headers,
                     body: JSON.stringify({ ticket })
                 });
                 const data = await res.json();
@@ -3142,9 +3156,12 @@ Evaluate objectively. Return ONLY valid JSON:
         
         disconnectAccount() {
             if (!confirm('هل تريد تسجيل الخروج وفصل هذا الحساب من هذا الجهاز؟')) return;
-            localStorage.removeItem('mp_at_server');
-            localStorage.removeItem('mp_at_login');
-            localStorage.removeItem('mp_at_mode');
+            
+                localStorage.removeItem('mp_at_server');
+                localStorage.removeItem('mp_at_login');
+                localStorage.removeItem('mp_at_password'); // Clear legacy password
+                localStorage.removeItem('mp_at_mode');
+
             if (document.getElementById('at-server-name')) document.getElementById('at-server-name').value = '';
             if (document.getElementById('at-login-num')) document.getElementById('at-login-num').value = '';
             if (document.getElementById('at-password')) document.getElementById('at-password').value = '';
@@ -3166,8 +3183,7 @@ Evaluate objectively. Return ONLY valid JSON:
             try {
                 const server = document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
                 const login = document.getElementById('at-login-num')?.value.trim() || '2001944351';
-                const password = document.getElementById('at-password')?.value || '';
-                const mode = document.getElementById('at-trading-mode')?.value || 'demo';
+                                const mode = document.getElementById('at-trading-mode')?.value || 'demo';
 
                 // Save locally so it never resets on page refresh
                 localStorage.setItem('mp_at_server', server);
@@ -3187,7 +3203,7 @@ Evaluate objectively. Return ONLY valid JSON:
                 const res = await fetch(`${this.apiBase}/api/autotrade/connect`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ server, login, password, mode }),
+                    body: JSON.stringify({ server, login, mode }),
                     signal: ctrl.signal
                 });
                 clearTimeout(timeoutId);
@@ -3216,9 +3232,16 @@ Evaluate objectively. Return ONLY valid JSON:
         async executeSignal(signal) {
             if (!this.state.enabled || this.state.emergency_stop) return;
             try {
+                
+                const reqHeaders = { 'Content-Type': 'application/json' };
+                const savedLogin = localStorage.getItem('mp_at_login');
+                const savedServer = localStorage.getItem('mp_at_server');
+                if (savedLogin) reqHeaders['X-Account-Login'] = savedLogin;
+                if (savedServer) reqHeaders['X-Account-Server'] = savedServer;
+
                 const res = await fetch(`${this.apiBase}/api/autotrade/execute`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: reqHeaders,
                     body: JSON.stringify({
                         symbol: signal.symbol,
                         type: signal.type,
