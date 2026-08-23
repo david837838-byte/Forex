@@ -30,7 +30,7 @@ import yfinance as yf
 import re
 
 app = Flask(__name__)
-CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=True)
+CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=True, allow_headers=["Content-Type", "Authorization", "X-Account-Login", "X-Account-Server", "X-MarketPulse-Secret", "X-User-Id"])
 
 FETCH_INTERVAL = 5  # Fetch fresh TradingView prices every 5 seconds!
 MACRO_FETCH_INTERVAL = 60 # Fetch news every 60 seconds
@@ -1620,7 +1620,7 @@ def add_cors_headers(response):
         response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
 
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Account-Login, X-MarketPulse-Secret, X-User-Id'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Account-Login, X-Account-Server, X-MarketPulse-Secret, X-User-Id'
     return response
 
 @app.route('/<path:dummy>', methods=['OPTIONS'])
@@ -1629,7 +1629,7 @@ def handle_options_preflight(dummy=None):
     response = jsonify({'status': 'ok'})
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Account-Login, X-MarketPulse-Secret, X-User-Id'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Account-Login, X-Account-Server, X-MarketPulse-Secret, X-User-Id'
     return response
 
 if __name__ == '__main__':
