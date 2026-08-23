@@ -5,6 +5,13 @@ import json
 import urllib.request
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+
+try:
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (min(65535, hard), hard))
+except Exception:
+    pass
 """
 ==========================================================================
 MARKETPULSE FX — EXCLUSIVE TRADINGVIEW REAL-TIME BACKEND SERVER
@@ -18,21 +25,14 @@ Pulls 100% Real-Time Live Prices directly from TradingView's Global Scanner API:
 - Crypto: BINANCE (BTCUSDT, ETHUSDT, SOLUSDT)
 """
 
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-import urllib.request
-import json
-import threading
-import time
 import xml.etree.ElementTree as ET
 import re
 import yfinance as yf
-import re
 
 app = Flask(__name__)
-CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=True, allow_headers=["Content-Type", "Authorization", "X-Account-Login", "X-Account-Server", "X-MarketPulse-Secret", "X-User-Id"])
+CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=True, max_age=86400, allow_headers=["Content-Type", "Authorization", "X-Account-Login", "X-Account-Server", "X-MarketPulse-Secret", "X-User-Id"])
 
-FETCH_INTERVAL = 5  # Fetch fresh TradingView prices every 5 seconds!
+FETCH_INTERVAL = 6  # Fetch fresh TradingView prices every 6 seconds cleanly!
 MACRO_FETCH_INTERVAL = 60 # Fetch news every 60 seconds
 cache_lock = threading.Lock()
 
@@ -94,7 +94,8 @@ def fetch_tradingview_live_prices():
             data=json.dumps(payload).encode('utf-8'),
             headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Connection': 'close'
             }
         )
         with urllib.request.urlopen(req, timeout=4) as resp:
@@ -1619,8 +1620,8 @@ def add_cors_headers(response):
     elif origin:
         response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Account-Login, X-Account-Server, X-MarketPulse-Secret, X-User-Id'
+    response.headers['Access-Control-Max-Age'] = '86400'
     return response
 
 @app.route('/<path:dummy>', methods=['OPTIONS'])
@@ -1630,6 +1631,7 @@ def handle_options_preflight(dummy=None):
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Account-Login, X-Account-Server, X-MarketPulse-Secret, X-User-Id'
+    response.headers['Access-Control-Max-Age'] = '86400'
     return response
 
 if __name__ == '__main__':

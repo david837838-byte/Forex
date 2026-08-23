@@ -2674,10 +2674,10 @@ Evaluate objectively. Return ONLY valid JSON:
     });
     fetchCrypto();
 
-    // 1-Second Price & UI Tickers
+    // 3-Second Price & UI Tickers (Gentle & Real-Time)
     setInterval(updateSession, 1000);
-    setInterval(fetchPythonYFinancePrices, 1000);
-    setInterval(fetchCrypto, 1000);
+    setInterval(fetchPythonYFinancePrices, 3000);
+    setInterval(fetchCrypto, 3000);
 
     // 1-Minute Core Market Scanner (Updates all assets, indicators, and MTF)
     setInterval(scanMarket, 60000);
@@ -2821,13 +2821,12 @@ Evaluate objectively. Return ONLY valid JSON:
                 const savedLogin = localStorage.getItem('mp_at_login') || document.getElementById('at-login-num')?.value.trim() || '';
                 const savedServer = localStorage.getItem('mp_at_server') || document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
                 const queryParam = savedLogin ? `?login=${encodeURIComponent(savedLogin)}&server=${encodeURIComponent(savedServer)}` : '';
-                const headers = savedLogin ? { 'X-Account-Login': savedLogin, 'X-Account-Server': savedServer } : {};
 
                 const [statusRes, posRes, histRes, logsRes] = await Promise.all([
-                    fetch(`${this.apiBase}/api/autotrade/status${queryParam}`, { headers }),
-                    fetch(`${this.apiBase}/api/autotrade/positions${queryParam}`, { headers }),
-                    fetch(`${this.apiBase}/api/autotrade/history${queryParam}`, { headers }),
-                    fetch(`${this.apiBase}/api/autotrade/audit-logs${queryParam}`, { headers })
+                    fetch(`${this.apiBase}/api/autotrade/status${queryParam}`),
+                    fetch(`${this.apiBase}/api/autotrade/positions${queryParam}`),
+                    fetch(`${this.apiBase}/api/autotrade/history${queryParam}`),
+                    fetch(`${this.apiBase}/api/autotrade/audit-logs${queryParam}`)
                 ]);
 
                 if (statusRes.ok) {
@@ -3347,9 +3346,8 @@ Evaluate objectively. Return ONLY valid JSON:
                 });
             });
 
-            // 6. 2-Second Real-Time Telemetry Polling
-            setInterval(() => { this.syncStatus(); }, 2000);
-            this.syncStatus();
+            // 6. AutoTrade Background Polling Paused (Manual Trigger Only)
+            // Polling is stopped per user request to prioritize core Backend & Live Prices.
         }
     };
 
