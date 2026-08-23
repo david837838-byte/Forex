@@ -2866,6 +2866,7 @@ Evaluate objectively. Return ONLY valid JSON:
 
                 
             // 7. Auto-populate Connection Form Fields if not actively focused
+            const acc = this.state.account || {};
             const serverInput = document.getElementById('at-server-name');
             const loginInput = document.getElementById('at-login-num');
             if (serverInput && acc.server && !serverInput.matches(':focus')) {
@@ -2877,6 +2878,7 @@ Evaluate objectively. Return ONLY valid JSON:
 
             this.renderUI();
             } catch (e) {
+                console.error('syncStatus Error:', e);
                 this.state.account.connected = false;
                 this.renderUI();
             }
