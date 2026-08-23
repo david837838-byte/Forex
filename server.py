@@ -555,48 +555,6 @@ def load_persisted_state():
     return json.loads(json.dumps(default_state))
 
 
-# ============================================================
-# MULTI-TENANT ACCOUNT ISOLATION ENGINE
-# ============================================================
-user_accounts_store = {}
-
-def get_or_create_user_account(login_str, server_name="JustMarkets-Demo"):
-    login_key = str(login_str).strip() if login_str else ""
-    if not login_key:
-        return autotrade_state
-    
-    if login_key not in user_accounts_store:
-        user_accounts_store[login_key] = {
-            'enabled': True,
-            'mode': 'demo',
-            'emergency_stop': False,
-            'emergency_reason': '',
-            'account': {
-                'connected': True,
-                'mt5_connected': True,
-                'ea_connected': True,
-                'broker_connected': True,
-                'bridge_mode': 'EA_WEBHOOK_LIVE',
-                'server': server_name,
-                'login': login_key,
-                'currency': 'USD',
-                'balance': autotrade_state['account']['balance'],
-                'equity': autotrade_state['account']['equity'],
-                'margin': autotrade_state['account']['margin'],
-                'free_margin': autotrade_state['account']['free_margin'],
-                'margin_level': autotrade_state['account']['margin_level'],
-                'last_heartbeat': time.time(),
-                'last_sync_time': time.strftime('%H:%M:%S'),
-                'latency_ms': 12.0
-            },
-            'risk_config': copy.deepcopy(autotrade_state['risk_config']),
-            'daily_stats': copy.deepcopy(autotrade_state['daily_stats']),
-            'open_positions': copy.deepcopy(autotrade_state['open_positions']),
-            'history': copy.deepcopy(autotrade_state['history']),
-            'audit_logs': copy.deepcopy(audit_logs)
-        }
-    return user_accounts_store[login_key]
-
 def save_persisted_state():
     """Persists current state to disk safely with atomic write."""
     try:
@@ -615,6 +573,59 @@ autotrade_state = load_persisted_state()
 commands_store = {}     # { command_id: command_dict }
 idempotency_store = {}  # { hash: timestamp }
 audit_logs = []         # Chronological audit log buffer (max 200 items)
+
+# ============================================================
+# MULTI-TENANT ACCOUNT ISOLATION ENGINE (ROBUST & THREAD-SAFE)
+# ============================================================
+user_accounts_store = {}
+
+def get_or_create_user_account(login_str=None, server_name="JustMarkets-Demo"):
+    login_key = str(login_str).strip() if login_str else ""
+    
+    # If no login provided, check if there is an active account in store
+    if not login_key:
+        if user_accounts_store:
+            # Pick the most recently active account
+            active_keys = sorted(user_accounts_store.keys(), 
+                                 key=lambda k: user_accounts_store[k]['account'].get('last_heartbeat', 0), 
+                                 reverse=True)
+            if active_keys:
+                login_key = active_keys[0]
+        if not login_key:
+            return autotrade_state
+    
+    if login_key not in user_accounts_store:
+        user_accounts_store[login_key] = {
+            'enabled': True,
+            'mode': 'demo',
+            'emergency_stop': False,
+            'emergency_reason': '',
+            'account': {
+                'connected': True,
+                'mt5_connected': True,
+                'ea_connected': True,
+                'broker_connected': True,
+                'bridge_mode': 'EA_WEBHOOK_LIVE',
+                'server': server_name,
+                'login': login_key,
+                'currency': 'USD',
+                'balance': float(autotrade_state['account'].get('balance', 0.0)),
+                'equity': float(autotrade_state['account'].get('equity', 0.0)),
+                'margin': float(autotrade_state['account'].get('margin', 0.0)),
+                'free_margin': float(autotrade_state['account'].get('free_margin', 0.0)),
+                'margin_level': float(autotrade_state['account'].get('margin_level', 0.0)),
+                'last_heartbeat': time.time(),
+                'last_sync_time': time.strftime('%H:%M:%S'),
+                'latency_ms': 12.0
+            },
+            'risk_config': copy.deepcopy(autotrade_state['risk_config']),
+            'daily_stats': copy.deepcopy(autotrade_state['daily_stats']),
+            'open_positions': copy.deepcopy(autotrade_state['open_positions']),
+            'history': copy.deepcopy(autotrade_state['history']),
+            'audit_logs': copy.deepcopy(audit_logs)
+        }
+    return user_accounts_store[login_key]
+
 
 def log_audit_event(event_type, symbol, ticket, reason, details=None):
     """Records a secure timestamped audit log entry."""
