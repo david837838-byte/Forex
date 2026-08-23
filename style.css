@@ -2356,3 +2356,124 @@ input:checked + .slider:before {
         transform: scale(1) translateY(0);
     }
 }
+
+/* ==========================================================================
+   MOBILE & IPAD RESPONSIVE STYLES (OVERRIDE)
+   ========================================================================== */
+
+/* Tablet & iPad Portrait (up to 1100px) */
+@media (max-width: 1100px) {
+    .workspace-grid {
+        grid-template-columns: 1fr;
+    }
+    .hero-title {
+        font-size: 1.8rem;
+    }
+    .modal-content {
+        max-width: 95% !important;
+        max-height: 95vh !important;
+    }
+    .at-tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding-bottom: 5px;
+    }
+    .at-tab-btn {
+        white-space: nowrap;
+    }
+}
+
+/* Mobile & Small Tablets (up to 768px) */
+@media (max-width: 768px) {
+    .nav-container {
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        padding: 0.75rem 1rem;
+    }
+    .nav-links {
+        width: 100%;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+    .nav-actions {
+        width: 100%;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+    .hero-title {
+        font-size: 1.5rem;
+    }
+    .hero-desc {
+        font-size: 0.95rem;
+    }
+    .quick-stats-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+    .signals-grid {
+        grid-template-columns: 1fr;
+    }
+    .section-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .filters-bar {
+        width: 100%;
+        justify-content: space-between;
+    }
+    .filter-btn {
+        flex: 1;
+        text-align: center;
+    }
+    
+    /* AutoTrade Modal Adjustments */
+    .modal-header h3 {
+        font-size: 1.1rem !important;
+    }
+    .at-form-grid {
+        grid-template-columns: 1fr !important;
+    }
+    .at-status-grid {
+        grid-template-columns: 1fr 1fr !important;
+    }
+    .at-positions-table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+    .at-history-table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+    .at-logs {
+        font-size: 0.75rem !important;
+    }
+}
+
+/* Very Small Mobile Phones (up to 480px) */
+@media (max-width: 480px) {
+    .quick-stats-grid {
+        grid-template-columns: 1fr;
+    }
+    .at-status-grid {
+        grid-template-columns: 1fr !important;
+    }
+    .ticker-label {
+        display: none; /* Hide label on very small screens to give space for ticker */
+    }
+    .stat-info .price {
+        font-size: 1.2rem;
+    }
+    .btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .nav-item {
+        padding: 0.4rem 0.6rem;
+        font-size: 0.8rem;
+    }
+    .brand-text h1 {
+        font-size: 1.1rem;
+    }
+}
