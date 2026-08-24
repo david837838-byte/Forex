@@ -54,7 +54,7 @@ def add_cors_headers(response):
 
 FETCH_INTERVAL = 6  # Fetch fresh TradingView prices every 6 seconds cleanly!
 MACRO_FETCH_INTERVAL = 60 # Fetch news every 60 seconds
-cache_lock = threading.Lock()
+cache_lock = threading.RLock()
 
 price_cache = {
     'last_updated': 0.0,
@@ -492,9 +492,9 @@ STATE_FILE_PATH = "autotrade_state.json"
 EA_WEBHOOK_SECRET = "marketpulse_live_bridge_sec_2026"
 COMMAND_TTL_SECONDS = 60.0  # 60s Time-To-Live for queued commands
 
-autotrade_lock = threading.Lock()
-execution_mutex = threading.Lock()
-command_lock = threading.Lock()
+autotrade_lock = threading.RLock()
+execution_mutex = threading.RLock()
+command_lock = threading.RLock()
 
 # Initial Default State Structure
 default_state = {

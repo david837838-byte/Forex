@@ -4,13 +4,14 @@ import os
 import threading
 
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "marketpulse.db")
-db_lock = threading.Lock()
+db_lock = threading.RLock()
 
 def get_connection():
-    """Returns a SQLite connection with busy timeout configured."""
-    conn = sqlite3.connect(DB_FILE, timeout=20.0, check_same_thread=False)
+    """Returns a SQLite connection with WAL mode and busy timeout configured."""
+    conn = sqlite3.connect(DB_FILE, timeout=15.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=20000;")
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=15000;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
 
@@ -356,14 +357,13 @@ def get_dashboard_snapshot(server="JustMarkets-Demo", login=""):
     with db_lock:
         conn = get_connection()
         try:
-            with conn:
-                c = conn.cursor()
-                if not login or login == 'default_account':
-                    c.execute("SELECT server, login FROM accounts WHERE last_heartbeat > 0 ORDER BY last_heartbeat DESC LIMIT 1")
-                    active_row = c.fetchone()
-                    if active_row and active_row['login']:
-                        server = active_row['server']
-                        login = active_row['login']
+            c = conn.cursor()
+            if not login or login == 'default_account':
+                c.execute("SELECT server, login FROM accounts WHERE last_heartbeat > 0 ORDER BY last_heartbeat DESC LIMIT 1")
+                active_row = c.fetchone()
+                if active_row and active_row['login']:
+                    server = active_row['server']
+                    login = active_row['login']
         finally:
             conn.close()
 
@@ -381,29 +381,28 @@ def get_dashboard_snapshot(server="JustMarkets-Demo", login=""):
     with db_lock:
         conn = get_connection()
         try:
-            with conn:
-                c = conn.cursor()
+            c = conn.cursor()
 
-                # Open positions: Fetch all active positions
-                c.execute("SELECT * FROM positions ORDER BY created_at DESC")
-                open_positions = [dict(r) for r in c.fetchall()]
+            # Open positions: Fetch all active positions
+            c.execute("SELECT * FROM positions ORDER BY created_at DESC")
+            open_positions = [dict(r) for r in c.fetchall()]
 
-                # Trade history (last 25)
-                c.execute("SELECT * FROM trades_history ORDER BY closed_at DESC LIMIT 25")
-                history = [dict(r) for r in c.fetchall()]
+            # Trade history (last 25)
+            c.execute("SELECT * FROM trades_history ORDER BY closed_at DESC LIMIT 25")
+            history = [dict(r) for r in c.fetchall()]
 
-                # Audit logs (last 30)
-                c.execute("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 30")
-                logs = [dict(r) for r in c.fetchall()]
+            # Audit logs (last 30)
+            c.execute("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 30")
+            logs = [dict(r) for r in c.fetchall()]
 
-                # Daily stats calculation
-                start_of_day = now - (now % 86400)
-                c.execute("SELECT COUNT(*), COALESCE(SUM(pnl), 0.0) FROM trades_history WHERE closed_at >= ?", (start_of_day,))
-                daily_row = c.fetchone()
-                trades_count = daily_row[0] if daily_row else 0
-                realized_pnl = round(daily_row[1], 2) if daily_row else 0.0
+            # Daily stats calculation
+            start_of_day = now - (now % 86400)
+            c.execute("SELECT COUNT(*), COALESCE(SUM(pnl), 0.0) FROM trades_history WHERE closed_at >= ?", (start_of_day,))
+            daily_row = c.fetchone()
+            trades_count = daily_row[0] if daily_row else 0
+            realized_pnl = round(daily_row[1], 2) if daily_row else 0.0
 
-                floating_pnl = round(sum(p.get('pnl', 0.0) for p in open_positions), 2)
+            floating_pnl = round(sum(p.get('pnl', 0.0) for p in open_positions), 2)
         finally:
             conn.close()
 
