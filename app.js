@@ -3125,6 +3125,13 @@ Evaluate objectively. Return ONLY valid JSON:
         },
 
         async saveConfig() {
+            const btn = document.getElementById('save-at-config-btn');
+            const origHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> جاري حفظ الإعدادات...';
+            }
+
             try {
                 const risk_percent = parseFloat(document.getElementById('at-risk-percent')?.value || 1.0);
                 const max_lot_cap = parseFloat(document.getElementById('at-max-lot')?.value || 0.50);
@@ -3156,9 +3163,16 @@ Evaluate objectively. Return ONLY valid JSON:
                 if (data.status === 'success') {
                     alert('✅ تم حفظ قواعد إدارة المخاطر وتفضيلات الأسواق وتطبيقها فوراً!');
                     this.syncStatus();
+                } else {
+                    alert('⚠️ فشل حفظ الإعدادات: ' + (data.message || 'حدث خطأ'));
                 }
             } catch (e) {
                 alert('فشل حفظ الإعدادات: ' + e.message);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = origHtml;
+                }
             }
         },
 

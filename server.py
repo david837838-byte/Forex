@@ -31,7 +31,26 @@ import re
 import yfinance as yf
 
 app = Flask(__name__)
-CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=True, max_age=86400, allow_headers=["Content-Type", "Authorization", "X-Account-Login", "X-Account-Server", "X-MarketPulse-Secret", "X-User-Id"])
+CORS(app, resources={r'/*': {'origins': '*'}}, max_age=86400)
+
+@app.before_request
+def handle_options_preflight():
+    if request.method == 'OPTIONS':
+        from flask import Response
+        res = Response(status=204)
+        res.headers['Access-Control-Allow-Origin'] = '*'
+        res.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        res.headers['Access-Control-Allow-Headers'] = '*'
+        res.headers['Access-Control-Max-Age'] = '86400'
+        return res
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = '*'
+    response.headers['Access-Control-Max-Age'] = '86400'
+    return response
 
 FETCH_INTERVAL = 6  # Fetch fresh TradingView prices every 6 seconds cleanly!
 MACRO_FETCH_INTERVAL = 60 # Fetch news every 60 seconds
