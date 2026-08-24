@@ -2837,6 +2837,12 @@ Evaluate objectively. Return ONLY valid JSON:
                         this.state.open_positions = data.open_positions || [];
                         this.state.history = data.history || [];
                         this.state.audit_logs = data.audit_logs || [];
+
+                        // Auto-persist active credentials if returned by backend
+                        if (data.account && data.account.login) {
+                            if (!localStorage.getItem('mp_at_login')) localStorage.setItem('mp_at_login', data.account.login);
+                            if (!localStorage.getItem('mp_at_server') && data.account.server) localStorage.setItem('mp_at_server', data.account.server);
+                        }
                     }
                 }
 
@@ -3494,20 +3500,13 @@ Evaluate objectively. Return ONLY valid JSON:
                 }
             }, 3000);
 
-            // Gentle background heartbeat check every 15s (Only if account login is saved)
+            // Gentle background heartbeat check every 4s
             setInterval(() => {
-                const modal = document.getElementById('autotrade-modal');
-                const isModalOpen = modal && (modal.style.display === 'flex' || modal.style.display === 'block');
-                const savedLogin = localStorage.getItem('mp_at_login');
-                if (!isModalOpen && savedLogin) {
-                    this.syncStatus();
-                }
-            }, 15000);
+                this.syncStatus();
+            }, 4000);
 
             // Initial check on startup
-            if (localStorage.getItem('mp_at_login')) {
-                this.syncStatus();
-            }
+            this.syncStatus();
         }
     };
 

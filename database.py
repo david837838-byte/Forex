@@ -350,14 +350,29 @@ def log_audit(account_key, event_type, symbol, ticket, message):
 
 def get_dashboard_snapshot(server="JustMarkets-Demo", login=""):
     """Fetches complete consolidated snapshot for the web dashboard in a single query."""
+    if not login or login == 'default_account':
+        with db_lock:
+            conn = get_connection()
+            try:
+                with conn:
+                    c = conn.cursor()
+                    c.execute("SELECT server, login FROM accounts WHERE last_heartbeat > 0 ORDER BY last_heartbeat DESC LIMIT 1")
+                    active_row = c.fetchone()
+                    if active_row and active_row['login']:
+                        server = active_row['server']
+                        login = active_row['login']
+            finally:
+                conn.close()
+
     key = get_account_key(server, login)
     acc_dict, risk_dict = get_or_create_account(server, login)
     now = time.time()
 
-    is_fresh = (now - acc_dict.get('last_heartbeat', 0)) < 15.0
+    is_fresh = (now - acc_dict.get('last_heartbeat', 0)) < 60.0
     acc_dict['connected'] = bool(is_fresh and acc_dict.get('connected'))
     acc_dict['mt5_connected'] = bool(is_fresh)
     acc_dict['ea_connected'] = bool(is_fresh)
+    acc_dict['is_heartbeat_fresh'] = is_fresh
 
     with db_lock:
         conn = get_connection()
@@ -366,15 +381,15 @@ def get_dashboard_snapshot(server="JustMarkets-Demo", login=""):
                 c = conn.cursor()
 
                 # Open positions
-                c.execute("SELECT * FROM positions WHERE account_key = ? ORDER BY created_at DESC", (key,))
+                c.execute("SELECT * FROM positions WHERE account_key = ? OR account_key = 'default_account' ORDER BY created_at DESC", (key,))
                 open_positions = [dict(r) for r in c.fetchall()]
 
                 # Trade history (last 25)
-                c.execute("SELECT * FROM trades_history WHERE account_key = ? ORDER BY closed_at DESC LIMIT 25", (key,))
+                c.execute("SELECT * FROM trades_history WHERE account_key = ? OR account_key = 'default_account' ORDER BY closed_at DESC LIMIT 25", (key,))
                 history = [dict(r) for r in c.fetchall()]
 
                 # Audit logs (last 30)
-                c.execute("SELECT * FROM audit_logs WHERE account_key = ? ORDER BY id DESC LIMIT 30", (key,))
+                c.execute("SELECT * FROM audit_logs WHERE account_key = ? OR account_key = 'default_account' ORDER BY id DESC LIMIT 30", (key,))
                 logs = [dict(r) for r in c.fetchall()]
 
                 # Daily stats calculation

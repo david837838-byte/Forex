@@ -802,6 +802,20 @@ def validate_trade_risk(signal_data, login=None, server_name=None):
     req_login = login or signal_data.get('login') or ''
     req_server = server_name or signal_data.get('server') or 'JustMarkets-Demo'
 
+    if not req_login:
+        with database.db_lock:
+            conn = database.get_connection()
+            try:
+                with conn:
+                    c = conn.cursor()
+                    c.execute("SELECT server, login FROM accounts WHERE last_heartbeat > 0 ORDER BY last_heartbeat DESC LIMIT 1")
+                    r = c.fetchone()
+                    if r and r['login']:
+                        req_login = r['login']
+                        req_server = r['server']
+            finally:
+                conn.close()
+
     with autotrade_lock:
         target_state = get_or_create_user_account(req_login, req_server) if req_login else autotrade_state
 
@@ -821,8 +835,14 @@ def validate_trade_risk(signal_data, login=None, server_name=None):
         acc = target_state['account']
         d_stats = target_state['daily_stats']
 
+        # Check heartbeat from memory or SQLite
+        db_acc, _ = database.get_or_create_account(req_server, req_login)
+        acc_hb = max(acc.get('last_heartbeat', 0), db_acc.get('last_heartbeat', 0))
+        heartbeat_age = now - acc_hb if acc_hb > 0 else 999.0
+        is_conn = acc_hb > 0 and heartbeat_age < 60.0
+
         # 1. Master AutoTrade Enable Check
-        if not target_state['enabled']:
+        if not target_state['enabled'] and not autotrade_state['enabled']:
             return False, "AUTOTRADE_DISABLED", "التداول الآلي متوقف حالياً في لوحة التحكم (اضغط تفعيل التداول الآلي 🟢)"
 
         # 2. Emergency Kill Switch Check
@@ -830,8 +850,7 @@ def validate_trade_risk(signal_data, login=None, server_name=None):
             return False, "EMERGENCY_STOP_ACTIVE", f"تم تفعيل زر الطوارئ سابقاً: {target_state['emergency_reason']}"
 
         # 3. Live MT5 Heartbeat Freshness (< 60s timeout)
-        heartbeat_age = now - acc['last_heartbeat']
-        if not acc['connected'] or (acc['last_heartbeat'] > 0 and heartbeat_age > 60.0):
+        if not is_conn:
             return False, "MT5_DISCONNECTED", "انقطع الاتصال ببرنامج الميتاتريدر أو توقف الإكسبرت (Heartbeat Timeout > 60s)"
 
         # 4. Starting Balance & Drawdown Calculation
