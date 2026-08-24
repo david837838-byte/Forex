@@ -3015,6 +3015,31 @@ Evaluate objectively. Return ONLY valid JSON:
                     }).join('');
                 }
             }
+
+            // 7. Auto-populate Risk & Asset Selection Form Fields if not focused
+            const cfg = this.state.risk_config || {};
+            const rPer = document.getElementById('at-risk-percent');
+            const rLot = document.getElementById('at-max-lot');
+            const rOpen = document.getElementById('at-max-open');
+            const rScore = document.getElementById('at-min-score');
+            const rBe = document.getElementById('at-auto-be');
+            const rTp1 = document.getElementById('at-partial-tp1');
+            const rMetals = document.getElementById('at-allow-metals');
+            const rForex = document.getElementById('at-allow-forex');
+            const rStocks = document.getElementById('at-allow-stocks');
+            const rCrypto = document.getElementById('at-allow-crypto');
+
+            if (rPer && cfg.risk_percent !== undefined && !rPer.matches(':focus')) rPer.value = String(cfg.risk_percent);
+            if (rLot && cfg.max_lot_cap !== undefined && !rLot.matches(':focus')) rLot.value = String(cfg.max_lot_cap);
+            if (rOpen && cfg.max_open_trades !== undefined && !rOpen.matches(':focus')) rOpen.value = String(cfg.max_open_trades);
+            if (rScore && cfg.min_score !== undefined && !rScore.matches(':focus')) rScore.value = String(cfg.min_score);
+            if (rBe && cfg.auto_breakeven !== undefined) rBe.checked = Boolean(cfg.auto_breakeven);
+            if (rTp1 && cfg.partial_tp1_close_pct !== undefined) rTp1.checked = Number(cfg.partial_tp1_close_pct) > 0;
+
+            if (rMetals && cfg.allowed_metals !== undefined) rMetals.checked = Boolean(cfg.allowed_metals);
+            if (rForex && cfg.allowed_forex !== undefined) rForex.checked = Boolean(cfg.allowed_forex);
+            if (rStocks && cfg.allowed_stocks !== undefined) rStocks.checked = Boolean(cfg.allowed_stocks);
+            if (rCrypto && cfg.allowed_crypto !== undefined) rCrypto.checked = Boolean(cfg.allowed_crypto);
         },
 
         async toggleAutoTrade(enabled) {
@@ -3058,16 +3083,15 @@ Evaluate objectively. Return ONLY valid JSON:
             }
 
             try {
-                
-            const reqHeaders = { 'Content-Type': 'application/json' };
-            const savedLogin = localStorage.getItem('mp_at_login');
-            const savedServer = localStorage.getItem('mp_at_server');
-            if (savedLogin) reqHeaders['X-Account-Login'] = savedLogin;
-            if (savedServer) reqHeaders['X-Account-Server'] = savedServer;
+                const reqHeaders = { 'Content-Type': 'application/json' };
+                const savedLogin = localStorage.getItem('mp_at_login');
+                const savedServer = localStorage.getItem('mp_at_server');
+                if (savedLogin) reqHeaders['X-Account-Login'] = savedLogin;
+                if (savedServer) reqHeaders['X-Account-Server'] = savedServer;
 
-            const res = await fetch(`${this.apiBase}/api/autotrade/emergency-stop`, {
-                method: 'POST',
-                headers: reqHeaders,
+                const res = await fetch(`${this.apiBase}/api/autotrade/emergency-stop`, {
+                    method: 'POST',
+                    headers: reqHeaders,
                     body: JSON.stringify({ reason: 'تفعيل إغلاق الطوارئ الشامل المباشر من المتداول', close_all: true })
                 });
                 const data = await res.json();
@@ -3109,17 +3133,28 @@ Evaluate objectively. Return ONLY valid JSON:
                 const auto_breakeven = document.getElementById('at-auto-be')?.checked ?? true;
                 const partial_tp1 = document.getElementById('at-partial-tp1')?.checked ?? true;
 
+                const allowed_metals = document.getElementById('at-allow-metals')?.checked ?? true;
+                const allowed_forex = document.getElementById('at-allow-forex')?.checked ?? true;
+                const allowed_stocks = document.getElementById('at-allow-stocks')?.checked ?? true;
+                const allowed_crypto = document.getElementById('at-allow-crypto')?.checked ?? true;
+
+                const savedLogin = localStorage.getItem('mp_at_login') || document.getElementById('at-login-num')?.value.trim() || '';
+                const savedServer = localStorage.getItem('mp_at_server') || document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
+
                 const res = await fetch(`${this.apiBase}/api/autotrade/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
+                        login: savedLogin,
+                        server: savedServer,
                         risk_percent, max_lot_cap, max_open_trades, min_score, auto_breakeven,
-                        partial_tp1_close_pct: partial_tp1 ? 50 : 0
+                        partial_tp1_close_pct: partial_tp1 ? 50 : 0,
+                        allowed_metals, allowed_forex, allowed_stocks, allowed_crypto
                     })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert('✅ تم حفظ قواعد إدارة المخاطر وتطبيقها فوراً!');
+                    alert('✅ تم حفظ قواعد إدارة المخاطر وتفضيلات الأسواق وتطبيقها فوراً!');
                     this.syncStatus();
                 }
             } catch (e) {
@@ -3205,8 +3240,33 @@ Evaluate objectively. Return ONLY valid JSON:
 
         async executeSignal(signal) {
             if (!this.state.enabled || this.state.emergency_stop) return;
+            const cfg = this.state.risk_config || {};
+            const sym = (signal.symbol || '').toUpperCase();
+
+            // Client-side pre-filtering by Asset Class
+            const isMetal = ['XAUUSD', 'XAGUSD', 'USOIL', 'NGAS', 'GOLD', 'SILVER'].some(m => sym.includes(m));
+            const isCrypto = ['BTC', 'ETH', 'SOL'].some(c => sym.includes(c));
+            const isStock = ['NVDA', 'TSLA', 'AAPL', 'US30', 'US100', 'SPX'].some(s => sym.includes(s));
+            const isForex = !isMetal && !isCrypto && !isStock;
+
+            if (isMetal && cfg.allowed_metals === false) {
+                console.log(`[AUTOTRADE FILTERED] ${sym} skipped (Metals trading disabled in settings)`);
+                return;
+            }
+            if (isForex && cfg.allowed_forex === false) {
+                console.log(`[AUTOTRADE FILTERED] ${sym} skipped (Forex trading disabled in settings)`);
+                return;
+            }
+            if (isStock && cfg.allowed_stocks === false) {
+                console.log(`[AUTOTRADE FILTERED] ${sym} skipped (Stocks trading disabled in settings)`);
+                return;
+            }
+            if (isCrypto && cfg.allowed_crypto === false) {
+                console.log(`[AUTOTRADE FILTERED] ${sym} skipped (Crypto trading disabled in settings)`);
+                return;
+            }
+
             try {
-                
                 const reqHeaders = { 'Content-Type': 'application/json' };
                 const savedLogin = localStorage.getItem('mp_at_login');
                 const savedServer = localStorage.getItem('mp_at_server');

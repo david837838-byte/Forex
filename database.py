@@ -64,9 +64,27 @@ def init_db():
                     min_score INTEGER DEFAULT 75,
                     auto_breakeven INTEGER DEFAULT 1,
                     partial_tp1_close_pct INTEGER DEFAULT 50,
+                    allowed_metals INTEGER DEFAULT 1,
+                    allowed_forex INTEGER DEFAULT 1,
+                    allowed_stocks INTEGER DEFAULT 1,
+                    allowed_crypto INTEGER DEFAULT 1,
+                    allowed_symbols TEXT DEFAULT '',
                     updated_at REAL DEFAULT 0
                 );
                 """)
+
+                # Migrations for existing databases
+                for col, col_def in [
+                    ('allowed_metals', 'INTEGER DEFAULT 1'),
+                    ('allowed_forex', 'INTEGER DEFAULT 1'),
+                    ('allowed_stocks', 'INTEGER DEFAULT 1'),
+                    ('allowed_crypto', 'INTEGER DEFAULT 1'),
+                    ('allowed_symbols', "TEXT DEFAULT ''")
+                ]:
+                    try:
+                        cursor.execute(f"ALTER TABLE risk_configs ADD COLUMN {col} {col_def};")
+                    except Exception:
+                        pass
 
                 # 3. Positions Table
                 cursor.execute("""
@@ -202,9 +220,56 @@ def get_or_create_account(server="JustMarkets-Demo", login=""):
                 acc_dict = dict(acc_row)
                 risk_dict = dict(risk_row) if risk_row else {
                     'risk_percent': 1.0, 'max_lot_cap': 0.50, 'max_open_trades': 3,
-                    'min_score': 75, 'auto_breakeven': 1, 'partial_tp1_close_pct': 50
+                    'min_score': 75, 'auto_breakeven': 1, 'partial_tp1_close_pct': 50,
+                    'allowed_metals': 1, 'allowed_forex': 1, 'allowed_stocks': 1,
+                    'allowed_crypto': 1, 'allowed_symbols': ''
                 }
                 return acc_dict, risk_dict
+        finally:
+            conn.close()
+
+def update_risk_config_db(server, login, cfg_data):
+    """Updates user risk and asset selection settings in SQLite."""
+    key = get_account_key(server, login)
+    now = time.time()
+    with db_lock:
+        conn = get_connection()
+        try:
+            with conn:
+                conn.execute("""
+                INSERT INTO risk_configs (
+                    account_key, risk_percent, max_lot_cap, max_open_trades, min_score,
+                    auto_breakeven, partial_tp1_close_pct, allowed_metals, allowed_forex,
+                    allowed_stocks, allowed_crypto, allowed_symbols, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_key) DO UPDATE SET
+                    risk_percent=excluded.risk_percent,
+                    max_lot_cap=excluded.max_lot_cap,
+                    max_open_trades=excluded.max_open_trades,
+                    min_score=excluded.min_score,
+                    auto_breakeven=excluded.auto_breakeven,
+                    partial_tp1_close_pct=excluded.partial_tp1_close_pct,
+                    allowed_metals=excluded.allowed_metals,
+                    allowed_forex=excluded.allowed_forex,
+                    allowed_stocks=excluded.allowed_stocks,
+                    allowed_crypto=excluded.allowed_crypto,
+                    allowed_symbols=excluded.allowed_symbols,
+                    updated_at=excluded.updated_at
+                """, (
+                    key,
+                    float(cfg_data.get('risk_percent', 1.0)),
+                    float(cfg_data.get('max_lot_cap', 0.50)),
+                    int(cfg_data.get('max_open_trades', 3)),
+                    int(cfg_data.get('min_score', 75)),
+                    1 if cfg_data.get('auto_breakeven', True) else 0,
+                    int(cfg_data.get('partial_tp1_close_pct', 50)),
+                    1 if cfg_data.get('allowed_metals', True) else 0,
+                    1 if cfg_data.get('allowed_forex', True) else 0,
+                    1 if cfg_data.get('allowed_stocks', True) else 0,
+                    1 if cfg_data.get('allowed_crypto', True) else 0,
+                    str(cfg_data.get('allowed_symbols', '')),
+                    now
+                ))
         finally:
             conn.close()
 

@@ -1284,6 +1284,54 @@
                             </div>
                         </div>
 
+                        <!-- Asset Classes / Markets Filter Section -->
+                        <div style="background: rgba(0,176,255,0.05); border: 1px solid rgba(0,176,255,0.25); padding: 1rem; border-radius: 8px; margin-top: 1rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.4rem;">
+                                <label style="font-weight: 700; color: var(--info); font-size: 0.92rem; display: flex; align-items: center; gap: 0.4rem;">
+                                    <i class="fa-solid fa-layer-group"></i> اختيار الأسواق والأصول للدخول التلقائي:
+                                </label>
+                                <span style="font-size: 0.76rem; color: var(--text-secondary);">اختر الأسواق التي ترغب بفتح صفقاتها آلياً عند توفر فرصة قوية</span>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem;">
+                                <!-- Metals & Energy -->
+                                <label style="display: flex; align-items: center; gap: 0.6rem; background: rgba(15,22,35,0.7); border: 1px solid rgba(255,215,0,0.3); padding: 0.65rem 0.85rem; border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="at-allow-metals" checked style="width: 18px; height: 18px; cursor: pointer;">
+                                    <div>
+                                        <div style="font-weight: 700; color: var(--gold); font-size: 0.85rem;"><i class="fa-solid fa-coins"></i> المعادن والطاقة</div>
+                                        <small style="color: var(--text-secondary); font-size: 0.72rem;">الذهب (XAU)، الفضة، النفط (USOIL)</small>
+                                    </div>
+                                </label>
+
+                                <!-- Forex Currencies -->
+                                <label style="display: flex; align-items: center; gap: 0.6rem; background: rgba(15,22,35,0.7); border: 1px solid rgba(0,176,255,0.3); padding: 0.65rem 0.85rem; border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="at-allow-forex" checked style="width: 18px; height: 18px; cursor: pointer;">
+                                    <div>
+                                        <div style="font-weight: 700; color: var(--info); font-size: 0.85rem;"><i class="fa-solid fa-money-bill-transfer"></i> أزواج الفوركس</div>
+                                        <small style="color: var(--text-secondary); font-size: 0.72rem;">EURUSD, GBPUSD, USDJPY ...</small>
+                                    </div>
+                                </label>
+
+                                <!-- Stocks & Indices -->
+                                <label style="display: flex; align-items: center; gap: 0.6rem; background: rgba(15,22,35,0.7); border: 1px solid rgba(156,39,176,0.3); padding: 0.65rem 0.85rem; border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="at-allow-stocks" checked style="width: 18px; height: 18px; cursor: pointer;">
+                                    <div>
+                                        <div style="font-weight: 700; color: #ba68c8; font-size: 0.85rem;"><i class="fa-solid fa-chart-line"></i> الأسهم والمؤشرات</div>
+                                        <small style="color: var(--text-secondary); font-size: 0.72rem;">NVDA, TSLA, AAPL, US30</small>
+                                    </div>
+                                </label>
+
+                                <!-- Crypto Assets -->
+                                <label style="display: flex; align-items: center; gap: 0.6rem; background: rgba(15,22,35,0.7); border: 1px solid rgba(255,152,0,0.3); padding: 0.65rem 0.85rem; border-radius: 6px; cursor: pointer;">
+                                    <input type="checkbox" id="at-allow-crypto" checked style="width: 18px; height: 18px; cursor: pointer;">
+                                    <div>
+                                        <div style="font-weight: 700; color: #ffb74d; font-size: 0.85rem;"><i class="fa-brands fa-bitcoin"></i> العملات المشفرة</div>
+                                        <small style="color: var(--text-secondary); font-size: 0.72rem;">BTCUSD, ETHUSD, SOLUSD</small>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
                         <button class="btn btn-gold" id="save-at-config-btn" style="margin-top: 1.25rem; width: 100%;">
                             <i class="fa-solid fa-floppy-disk"></i> حفظ قواعد إدارة المخاطر وتطبيقها فوراً
                         </button>
@@ -1480,7 +1528,7 @@
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 
     <!-- Main JavaScript App Logic -->
-    <script src="app.js?v=37"></script>
+    <script src="app.js?v=38"></script>
 
     <!-- AI Assistant Floating Widget -->
     <div id="ai-assistant-widget" class="ai-widget-container">

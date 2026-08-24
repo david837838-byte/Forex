@@ -855,9 +855,23 @@ def validate_trade_risk(signal_data):
         if score < cfg['min_score']:
             return False, "SCORE_BELOW_MINIMUM", f"نقاط التوافق الفني ({score}) أقل من الحد الأدنى المطلوب ({cfg['min_score']})"
 
-        # 12. Valid Stop Loss Distance
-        sl_dist = abs(entry - sl)
+        # 12. Asset Class / Market Permission Check
         spec = get_symbol_spec(symbol)
+        category = spec.get('category', 'forex').lower()
+        if category in ['gold', 'oil', 'metals'] and not bool(cfg.get('allowed_metals', True)):
+            return False, "METALS_TRADING_DISABLED", f"تداول المعادن والطاقة ({symbol}) معطل حالياً بناءً على إعداداتك المحددة للأصول"
+
+        if category == 'forex' and not bool(cfg.get('allowed_forex', True)):
+            return False, "FOREX_TRADING_DISABLED", f"تداول أزواج العملات الأجنبية ({symbol}) معطل حالياً بناءً على إعداداتك المحددة للأصول"
+
+        if category == 'stocks' and not bool(cfg.get('allowed_stocks', True)):
+            return False, "STOCKS_TRADING_DISABLED", f"تداول الأسهم والمؤشرات ({symbol}) معطل حالياً بناءً على إعداداتك المحددة للأصول"
+
+        if category == 'crypto' and not bool(cfg.get('allowed_crypto', True)):
+            return False, "CRYPTO_TRADING_DISABLED", f"تداول العملات المشفرة ({symbol}) معطل حالياً بناءً على إعداداتك المحددة للأصول"
+
+        # 13. Valid Stop Loss Distance
+        sl_dist = abs(entry - sl)
         min_stop_distance = spec['point'] * 15
         if sl_dist < min_stop_distance:
             return False, "INVALID_STOP_LOSS", f"مسافة وقف الخسارة ({sl_dist}) أقل من الحد الأدنى المسموح ({min_stop_distance})"
@@ -1464,8 +1478,12 @@ def autotrade_post_pause():
 @app.route('/api/autotrade/config', methods=['POST'])
 def autotrade_post_config():
     data = request.json or {}
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login') or data.get('login', '')
+    req_server = request.args.get('server') or request.headers.get('X-Account-Server') or data.get('server', 'JustMarkets-Demo')
+
     with autotrade_lock:
-        cfg = autotrade_state['risk_config']
+        u_state = get_or_create_user_account(req_login, req_server) if req_login else autotrade_state
+        cfg = u_state['risk_config']
         if 'risk_percent' in data: cfg['risk_percent'] = float(data['risk_percent'])
         if 'max_lot_cap' in data: cfg['max_lot_cap'] = float(data['max_lot_cap'])
         if 'max_open_trades' in data: cfg['max_open_trades'] = int(data['max_open_trades'])
@@ -1474,10 +1492,18 @@ def autotrade_post_config():
         if 'min_score' in data: cfg['min_score'] = int(data['min_score'])
         if 'auto_breakeven' in data: cfg['auto_breakeven'] = bool(data['auto_breakeven'])
         if 'trailing_stop_enabled' in data: cfg['trailing_stop_enabled'] = bool(data['trailing_stop_enabled'])
+        if 'allowed_metals' in data: cfg['allowed_metals'] = bool(data['allowed_metals'])
+        if 'allowed_forex' in data: cfg['allowed_forex'] = bool(data['allowed_forex'])
+        if 'allowed_stocks' in data: cfg['allowed_stocks'] = bool(data['allowed_stocks'])
+        if 'allowed_crypto' in data: cfg['allowed_crypto'] = bool(data['allowed_crypto'])
+        if 'allowed_symbols' in data: cfg['allowed_symbols'] = str(data['allowed_symbols'])
         save_persisted_state()
 
-    log_audit_event("CONFIG_UPDATED", "SYSTEM", None, "تم تحديث قواعد إدارة المخاطر وسقف اللوت")
-    return jsonify({'status': 'success', 'config': autotrade_state['risk_config']})
+    # Save to SQLite Database
+    database.update_risk_config_db(req_server, req_login, cfg)
+
+    log_audit_event("CONFIG_UPDATED", "SYSTEM", None, "تم تحديث قواعد إدارة المخاطر وتفضيلات الأصول المسموحة بنجاح")
+    return jsonify({'status': 'success', 'config': cfg})
 
 @app.route('/api/autotrade/execute', methods=['POST'])
 def autotrade_post_execute():
