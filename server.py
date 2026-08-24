@@ -1357,33 +1357,37 @@ def mt5_ea_sync():
     if isinstance(positions, list):
         database.reconcile_mt5_positions_db(server_name, login, positions)
 
-    # 2. Also keep memory cache updated
+    # 2. Also keep global and user memory cache updated
     with autotrade_lock:
+        autotrade_state['account']['connected'] = True
+        autotrade_state['account']['mt5_connected'] = True
+        autotrade_state['account']['ea_connected'] = True
+        autotrade_state['account']['broker_connected'] = True
+        autotrade_state['account']['bridge_mode'] = 'EA_WEBHOOK_LIVE'
+        autotrade_state['account']['last_heartbeat'] = now
+        autotrade_state['account']['last_account_sync'] = now
+        autotrade_state['account']['last_position_sync'] = now
+        autotrade_state['account']['last_sync_time'] = time.strftime('%H:%M:%S')
+        autotrade_state['account']['balance'] = round(balance, 2)
+        autotrade_state['account']['equity'] = round(equity, 2)
+        autotrade_state['account']['margin'] = round(margin, 2)
+        autotrade_state['account']['free_margin'] = round(free_margin, 2)
+        autotrade_state['account']['margin_level'] = round((equity / margin) * 100, 2) if margin > 0 else 0.0
+        autotrade_state['account']['server'] = server_name
+        autotrade_state['account']['login'] = login
+        autotrade_state['account']['currency'] = currency
+        autotrade_state['account']['account_type'] = account_type
+        autotrade_state['account']['leverage'] = leverage
+
         u_state = get_or_create_user_account(login, server_name)
         u_acc = u_state['account']
-        u_acc['connected'] = True
-        u_acc['mt5_connected'] = True
-        u_acc['ea_connected'] = True
-        u_acc['broker_connected'] = True
-        u_acc['bridge_mode'] = 'EA_WEBHOOK_LIVE'
-        u_acc['last_heartbeat'] = now
-        u_acc['last_account_sync'] = now
-        u_acc['last_position_sync'] = now
-        u_acc['last_sync_time'] = time.strftime('%H:%M:%S')
-        u_acc['balance'] = round(balance, 2)
-        u_acc['equity'] = round(equity, 2)
-        u_acc['margin'] = round(margin, 2)
-        u_acc['free_margin'] = round(free_margin, 2)
-        u_acc['margin_level'] = round((equity / margin) * 100, 2) if margin > 0 else 0.0
-        u_acc['server'] = server_name
-        u_acc['login'] = login
-        u_acc['currency'] = currency
-        u_acc['account_type'] = account_type
-        u_acc['leverage'] = leverage
+        u_acc.update(autotrade_state['account'])
 
         if isinstance(positions, list):
             reconcile_positions_with_mt5(positions, u_state)
+            reconcile_positions_with_mt5(positions, autotrade_state)
             u_acc['last_position_sync'] = now
+            autotrade_state['account']['last_position_sync'] = now
 
     # 3. Pull pending commands from SQLite
     commands_to_send = database.get_pending_commands_db(server_name, login)

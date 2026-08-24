@@ -293,40 +293,43 @@ def update_account_telemetry(server, login, data):
         conn = get_connection()
         try:
             with conn:
-                conn.execute("""
-                INSERT INTO accounts (
-                    account_key, server, login, mode, balance, equity, margin, free_margin,
-                    margin_level, currency, account_type, leverage, connected, mt5_connected,
-                    ea_connected, broker_connected, bridge_mode, last_heartbeat, last_account_sync,
-                    last_position_sync, last_sync_time, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 'EA_WEBHOOK_LIVE', ?, ?, ?, ?, ?)
-                ON CONFLICT(account_key) DO UPDATE SET
-                    balance=excluded.balance,
-                    equity=excluded.equity,
-                    margin=excluded.margin,
-                    free_margin=excluded.free_margin,
-                    margin_level=excluded.margin_level,
-                    currency=excluded.currency,
-                    account_type=excluded.account_type,
-                    leverage=excluded.leverage,
-                    connected=1,
-                    mt5_connected=1,
-                    ea_connected=1,
-                    broker_connected=1,
-                    bridge_mode='EA_WEBHOOK_LIVE',
-                    last_heartbeat=excluded.last_heartbeat,
-                    last_account_sync=excluded.last_account_sync,
-                    last_position_sync=excluded.last_position_sync,
-                    last_sync_time=excluded.last_sync_time,
-                    updated_at=excluded.updated_at
-                """, (
-                    key, server, login, data.get('mode', 'demo'),
-                    data.get('balance', 0.0), data.get('equity', 0.0), data.get('margin', 0.0),
-                    data.get('free_margin', 0.0), data.get('margin_level', 0.0),
-                    data.get('currency', 'USD'), data.get('account_type', 'DEMO'),
-                    data.get('leverage', 100), now, now, now,
-                    time.strftime('%H:%M:%S'), now
-                ))
+                for target_k in set([key, 'default_account']):
+                    conn.execute("""
+                    INSERT INTO accounts (
+                        account_key, server, login, mode, balance, equity, margin, free_margin,
+                        margin_level, currency, account_type, leverage, connected, mt5_connected,
+                        ea_connected, broker_connected, bridge_mode, last_heartbeat, last_account_sync,
+                        last_position_sync, last_sync_time, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 'EA_WEBHOOK_LIVE', ?, ?, ?, ?, ?)
+                    ON CONFLICT(account_key) DO UPDATE SET
+                        server=excluded.server,
+                        login=excluded.login,
+                        balance=excluded.balance,
+                        equity=excluded.equity,
+                        margin=excluded.margin,
+                        free_margin=excluded.free_margin,
+                        margin_level=excluded.margin_level,
+                        currency=excluded.currency,
+                        account_type=excluded.account_type,
+                        leverage=excluded.leverage,
+                        connected=1,
+                        mt5_connected=1,
+                        ea_connected=1,
+                        broker_connected=1,
+                        bridge_mode='EA_WEBHOOK_LIVE',
+                        last_heartbeat=excluded.last_heartbeat,
+                        last_account_sync=excluded.last_account_sync,
+                        last_position_sync=excluded.last_position_sync,
+                        last_sync_time=excluded.last_sync_time,
+                        updated_at=excluded.updated_at
+                    """, (
+                        target_k, server, login, data.get('mode', 'demo'),
+                        data.get('balance', 0.0), data.get('equity', 0.0), data.get('margin', 0.0),
+                        data.get('free_margin', 0.0), data.get('margin_level', 0.0),
+                        data.get('currency', 'USD'), data.get('account_type', 'DEMO'),
+                        data.get('leverage', 100), now, now, now,
+                        time.strftime('%H:%M:%S'), now
+                    ))
         finally:
             conn.close()
 
@@ -350,19 +353,19 @@ def log_audit(account_key, event_type, symbol, ticket, message):
 
 def get_dashboard_snapshot(server="JustMarkets-Demo", login=""):
     """Fetches complete consolidated snapshot for the web dashboard in a single query."""
-    if not login or login == 'default_account':
-        with db_lock:
-            conn = get_connection()
-            try:
-                with conn:
-                    c = conn.cursor()
+    with db_lock:
+        conn = get_connection()
+        try:
+            with conn:
+                c = conn.cursor()
+                if not login or login == 'default_account':
                     c.execute("SELECT server, login FROM accounts WHERE last_heartbeat > 0 ORDER BY last_heartbeat DESC LIMIT 1")
                     active_row = c.fetchone()
                     if active_row and active_row['login']:
                         server = active_row['server']
                         login = active_row['login']
-            finally:
-                conn.close()
+        finally:
+            conn.close()
 
     key = get_account_key(server, login)
     acc_dict, risk_dict = get_or_create_account(server, login)
@@ -380,21 +383,21 @@ def get_dashboard_snapshot(server="JustMarkets-Demo", login=""):
             with conn:
                 c = conn.cursor()
 
-                # Open positions
-                c.execute("SELECT * FROM positions WHERE account_key = ? OR account_key = 'default_account' ORDER BY created_at DESC", (key,))
+                # Open positions: Fetch all active positions
+                c.execute("SELECT * FROM positions ORDER BY created_at DESC")
                 open_positions = [dict(r) for r in c.fetchall()]
 
                 # Trade history (last 25)
-                c.execute("SELECT * FROM trades_history WHERE account_key = ? OR account_key = 'default_account' ORDER BY closed_at DESC LIMIT 25", (key,))
+                c.execute("SELECT * FROM trades_history ORDER BY closed_at DESC LIMIT 25")
                 history = [dict(r) for r in c.fetchall()]
 
                 # Audit logs (last 30)
-                c.execute("SELECT * FROM audit_logs WHERE account_key = ? OR account_key = 'default_account' ORDER BY id DESC LIMIT 30", (key,))
+                c.execute("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 30")
                 logs = [dict(r) for r in c.fetchall()]
 
                 # Daily stats calculation
                 start_of_day = now - (now % 86400)
-                c.execute("SELECT COUNT(*), COALESCE(SUM(pnl), 0.0) FROM trades_history WHERE account_key = ? AND closed_at >= ?", (key, start_of_day))
+                c.execute("SELECT COUNT(*), COALESCE(SUM(pnl), 0.0) FROM trades_history WHERE closed_at >= ?", (start_of_day,))
                 daily_row = c.fetchone()
                 trades_count = daily_row[0] if daily_row else 0
                 realized_pnl = round(daily_row[1], 2) if daily_row else 0.0
@@ -435,7 +438,7 @@ def reconcile_mt5_positions_db(server, login, mt5_positions):
         try:
             with conn:
                 c = conn.cursor()
-                c.execute("SELECT * FROM positions WHERE account_key = ?", (key,))
+                c.execute("SELECT * FROM positions")
                 db_positions = {str(r['ticket']): dict(r) for r in c.fetchall()}
 
                 seen_tickets = set()
