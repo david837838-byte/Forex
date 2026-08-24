@@ -114,6 +114,48 @@ void ReportCommandResult(string cmdId, ulong ticket, int retcode, string errMsg)
 }
 
 //+------------------------------------------------------------------+
+//| Resolve symbol name matching broker prefix/suffix                |
+//+------------------------------------------------------------------+
+string ResolveBrokerSymbol(string reqSym)
+{
+   if(SymbolInfoDouble(reqSym, SYMBOL_BID) > 0) return reqSym;
+   
+   // Check current chart symbol
+   if(StringFind(_Symbol, reqSym) >= 0) return _Symbol;
+   
+   // Check common broker suffixes
+   string suffixes[] = {"m", "c", ".", "_", ".raw", "raw", ".pro", "pro", "i", ".m"};
+   for(int i = 0; i < ArraySize(suffixes); i++)
+   {
+      string testSym = reqSym + suffixes[i];
+      if(SymbolInfoDouble(testSym, SYMBOL_BID) > 0)
+      {
+         SymbolSelect(testSym, true);
+         return testSym;
+      }
+   }
+   
+   if(reqSym == "XAUUSD" && SymbolInfoDouble("GOLD", SYMBOL_BID) > 0) return "GOLD";
+   if(reqSym == "GOLD" && SymbolInfoDouble("XAUUSD", SYMBOL_BID) > 0) return "XAUUSD";
+   
+   return reqSym;
+}
+
+//+------------------------------------------------------------------+
+//| Set dynamic broker filling mode (FOK / IOC / RETURN)             |
+//+------------------------------------------------------------------+
+void SetSymbolFilling(string sym)
+{
+   uint filling = (uint)SymbolInfoInteger(sym, SYMBOL_FILLING_MODE);
+   if((filling & SYMBOL_FILLING_FOK) != 0)
+      trade.SetTypeFilling(ORDER_FILLING_FOK);
+   else if((filling & SYMBOL_FILLING_IOC) != 0)
+      trade.SetTypeFilling(ORDER_FILLING_IOC);
+   else
+      trade.SetTypeFilling(ORDER_FILLING_RETURN);
+}
+
+//+------------------------------------------------------------------+
 //| Parse and execute server commands from queue                     |
 //+------------------------------------------------------------------+
 void ProcessServerCommands(string response)
@@ -121,14 +163,19 @@ void ProcessServerCommands(string response)
    if(StringFind(response, "\"commands\":") < 0) return;
    
    // 1. OPEN ORDER
-   if(StringFind(response, "\"action\":\"OPEN\"") >= 0 || StringFind(response, "\"type\":\"BUY\"") >= 0 || StringFind(response, "\"type\":\"SELL\"") >= 0)
+   if(StringFind(response, "\"action\":\"OPEN\"") >= 0 || StringFind(response, "\"type\":\"BUY\"") >= 0 || StringFind(response, "\"type\":\"SELL\"") >= 0 || StringFind(response, "\"action\":\"BUY\"") >= 0 || StringFind(response, "\"action\":\"SELL\"") >= 0)
    {
       string cmdId = ExtractJSONValue(response, "command_id");
-      string sym   = ExtractJSONValue(response, "symbol");
+      string rawSym= ExtractJSONValue(response, "symbol");
       string typ   = ExtractJSONValue(response, "type");
+      if(typ == "") typ = ExtractJSONValue(response, "action");
       double lot   = StringToDouble(ExtractJSONValue(response, "lot"));
       double sl    = StringToDouble(ExtractJSONValue(response, "sl"));
       double tp    = StringToDouble(ExtractJSONValue(response, "tp1"));
+      
+      string sym = ResolveBrokerSymbol(rawSym);
+      SymbolSelect(sym, true);
+      SetSymbolFilling(sym);
       
       if(sym != "" && lot > 0)
       {
@@ -142,6 +189,27 @@ void ProcessServerCommands(string response)
          if(ticket == 0) ticket = trade.ResultDeal();
          int retcode = (int)trade.ResultRetcode();
          string errStr = trade.ResultRetcodeDescription();
+         
+         // Fallback if broker rejects market order with SL/TP initially (ECN/STP brokers)
+         if(!ok && (retcode == 10013 || retcode == 10030 || retcode == 10014 || retcode == 10006))
+         {
+            PrintFormat("⚠️ [MarketPulse Bridge] Retrying %s %s without initial SL/TP (Broker requires 2-step execution)...", typ, sym);
+            if(typ == "BUY" || typ == "OPEN_BUY")
+               ok = trade.Buy(lot, sym, 0, 0, 0, "MarketPulse AI");
+            else if(typ == "SELL" || typ == "OPEN_SELL")
+               ok = trade.Sell(lot, sym, 0, 0, 0, "MarketPulse AI");
+               
+            ticket = trade.ResultOrder();
+            if(ticket == 0) ticket = trade.ResultDeal();
+            retcode = (int)trade.ResultRetcode();
+            errStr = trade.ResultRetcodeDescription();
+            
+            if(ok && ticket > 0 && (sl > 0 || tp > 0))
+            {
+               Sleep(300);
+               trade.PositionModify(ticket, sl, tp);
+            }
+         }
          
          ReportCommandResult(cmdId, ticket, retcode, errStr);
          PrintFormat("🚀 [MarketPulse Bridge] Order: %s %s %.2f Lot | Result: %d (%s) | Ticket: %I64u", typ, sym, lot, retcode, errStr, ticket);
