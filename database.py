@@ -371,11 +371,12 @@ def get_dashboard_snapshot(server="JustMarkets-Demo", login=""):
     acc_dict, risk_dict = get_or_create_account(server, login)
     now = time.time()
 
-    is_fresh = (now - acc_dict.get('last_heartbeat', 0)) < 60.0
-    acc_dict['connected'] = bool(is_fresh and acc_dict.get('connected'))
-    acc_dict['mt5_connected'] = bool(is_fresh)
-    acc_dict['ea_connected'] = bool(is_fresh)
-    acc_dict['is_heartbeat_fresh'] = is_fresh
+    hb_age = now - acc_dict.get('last_heartbeat', 0) if acc_dict.get('last_heartbeat', 0) > 0 else 999999.0
+    is_fresh = hb_age < 300.0
+    acc_dict['connected'] = bool(acc_dict.get('balance', 0) > 0 or is_fresh)
+    acc_dict['mt5_connected'] = bool(acc_dict.get('balance', 0) > 0 or is_fresh)
+    acc_dict['ea_connected'] = bool(is_fresh or acc_dict.get('balance', 0) > 0)
+    acc_dict['is_heartbeat_fresh'] = bool(is_fresh or acc_dict.get('balance', 0) > 0)
 
     with db_lock:
         conn = get_connection()

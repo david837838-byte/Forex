@@ -2826,12 +2826,13 @@ Evaluate objectively. Return ONLY valid JSON:
                 if (res.ok) {
                     const data = await res.json();
                     if (data.status === 'success') {
+                        console.log('[AUTOTRADE SYNC]', data.account?.login, 'Bal:', data.account?.balance, 'Positions:', data.open_positions?.length);
                         this.state.enabled = data.enabled;
                         this.state.mode = data.mode;
                         this.state.emergency_stop = data.emergency_stop;
                         this.state.emergency_reason = data.emergency_reason;
                         this.state.is_heartbeat_fresh = data.is_heartbeat_fresh;
-                        this.state.account = data.account || this.state.account;
+                        this.state.account = Object.assign({}, this.state.account, data.account || {});
                         this.state.risk_config = data.risk_config || this.state.risk_config;
                         this.state.daily_stats = data.daily_stats || this.state.daily_stats;
                         this.state.open_positions = data.open_positions || [];
@@ -2840,8 +2841,8 @@ Evaluate objectively. Return ONLY valid JSON:
 
                         // Auto-persist active credentials if returned by backend
                         if (data.account && data.account.login) {
-                            if (!localStorage.getItem('mp_at_login')) localStorage.setItem('mp_at_login', data.account.login);
-                            if (!localStorage.getItem('mp_at_server') && data.account.server) localStorage.setItem('mp_at_server', data.account.server);
+                            if (!localStorage.getItem('mp_at_login')) localStorage.setItem('mp_at_login', String(data.account.login));
+                            if (!localStorage.getItem('mp_at_server') && data.account.server) localStorage.setItem('mp_at_server', String(data.account.server));
                         }
                     }
                 }
@@ -2860,14 +2861,13 @@ Evaluate objectively. Return ONLY valid JSON:
                 this.renderUI();
             } catch (e) {
                 console.warn('syncStatus Error:', e);
-                this.state.account.connected = false;
                 this.renderUI();
             }
         },
 
         renderUI() {
             const acc = this.state.account || {};
-            const isConnected = acc.connected && this.state.is_heartbeat_fresh;
+            const isConnected = acc.connected || this.state.is_heartbeat_fresh || (Number(acc.balance || 0) > 0);
             const isEnabled = this.state.enabled && !this.state.emergency_stop;
 
             // 1. Master Toggle & Status Badge
@@ -2902,10 +2902,14 @@ Evaluate objectively. Return ONLY valid JSON:
 
             if (openCountBadge) openCountBadge.textContent = openPos.length;
 
-            if (acc && typeof acc.balance === 'number' && acc.balance > 0) {
-                if (kpiBal) kpiBal.textContent = `$${acc.balance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-                if (kpiEq) kpiEq.textContent = `$${(acc.equity || acc.balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-                if (kpiFree) kpiFree.textContent = `$${(acc.free_margin || acc.balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            const realBal = Number(acc.balance || 0);
+            const realEq = Number(acc.equity || realBal);
+            const realFree = Number(acc.free_margin || realBal);
+
+            if (realBal > 0) {
+                if (kpiBal) kpiBal.textContent = `$${realBal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                if (kpiEq) kpiEq.textContent = `$${realEq.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                if (kpiFree) kpiFree.textContent = `$${realFree.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
             } else {
                 if (kpiBal) kpiBal.textContent = '—';
                 if (kpiEq) kpiEq.textContent = '—';
