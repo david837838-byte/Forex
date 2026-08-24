@@ -3300,6 +3300,86 @@ Evaluate objectively. Return ONLY valid JSON:
             }
         },
 
+        async testTrade() {
+            const btn = document.getElementById('at-test-trade-btn');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> جاري إرسال الأمر...';
+            }
+
+            try {
+                const cfg = this.state.risk_config || {};
+                const sym = (cfg.allowed_metals !== false) ? 'XAUUSD' : 'EURUSD';
+                const curPrice = (window.priceCache && window.priceCache[sym]?.price) || (sym === 'XAUUSD' ? 2400.0 : 1.0850);
+                const sl = sym === 'XAUUSD' ? Number((curPrice - 10.0).toFixed(2)) : Number((curPrice - 0.0030).toFixed(5));
+                const tp1 = sym === 'XAUUSD' ? Number((curPrice + 15.0).toFixed(2)) : Number((curPrice + 0.0050).toFixed(5));
+
+                const savedLogin = localStorage.getItem('mp_at_login') || document.getElementById('at-login-num')?.value.trim() || '';
+                const savedServer = localStorage.getItem('mp_at_server') || document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
+
+                // Ensure autotrade enabled state
+                if (!this.state.enabled) {
+                    await this.toggleAutoTrade(true);
+                }
+
+                const res = await fetch(`${this.apiBase}/api/autotrade/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        login: savedLogin,
+                        server: savedServer,
+                        symbol: sym,
+                        type: 'BUY',
+                        lot: 0.01,
+                        entry: curPrice,
+                        sl: sl,
+                        tp1: tp1,
+                        score: 85,
+                        signal_id: `TEST_${sym}_${Date.now()}`
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert(`🚀 ${data.message}\n\nسيقوم إكسبرت MT5 بالتقاط الأمر وتنفيذه فوراً على حسابك!`);
+                    this.syncStatus();
+                } else {
+                    alert(`⚠️ لم يتم فتح الصفقة: ${data.message}`);
+                }
+            } catch (e) {
+                alert('فشل إرسال أمر التجربة: ' + e.message);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fa-solid fa-vial"></i> تجربة أمر فتح فوري (0.01 لوت)';
+                }
+            }
+        },
+
+        async scanAndAutoExecute() {
+            const btn = document.getElementById('at-scan-execute-btn');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> جاري فحص الأسواق بالذكاء الاصطناعي...';
+            }
+            try {
+                if (!this.state.enabled) {
+                    await this.toggleAutoTrade(true);
+                }
+                if (typeof evaluateSignals === 'function') {
+                    await evaluateSignals(true);
+                }
+                alert('✅ تم مسح جميع الأسواق وفحص الفرص القوية! إذا توفرت فرصة تطابق شروطك تم إرسالها لـ MT5.');
+                this.syncStatus();
+            } catch (e) {
+                alert('خطأ أثناء فحص الأسواق: ' + e.message);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> فحص السوق والدخول بالفرص القوية الآن';
+                }
+            }
+        },
+
         init() {
             // Restore saved credentials from localStorage
             const savedServer = localStorage.getItem('mp_at_server');
@@ -3346,7 +3426,7 @@ Evaluate objectively. Return ONLY valid JSON:
                 });
             }
 
-            // 3. Two-Tier Emergency Controls
+            // 3. Two-Tier Emergency Controls & Quick Action Buttons
             const pauseBtn = document.getElementById('at-pause-btn');
             if (pauseBtn) {
                 pauseBtn.addEventListener('click', () => this.pauseNewTrades());
@@ -3355,6 +3435,16 @@ Evaluate objectively. Return ONLY valid JSON:
             const emBtn = document.getElementById('at-emergency-btn');
             if (emBtn) {
                 emBtn.addEventListener('click', () => this.triggerEmergencyStop());
+            }
+
+            const testBtn = document.getElementById('at-test-trade-btn');
+            if (testBtn) {
+                testBtn.addEventListener('click', () => this.testTrade());
+            }
+
+            const scanExecBtn = document.getElementById('at-scan-execute-btn');
+            if (scanExecBtn) {
+                scanExecBtn.addEventListener('click', () => this.scanAndAutoExecute());
             }
 
             // 4. Save Config & Connect Buttons

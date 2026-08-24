@@ -768,7 +768,7 @@ def reconcile_positions_with_mt5(mt5_positions, target_state, mt5_account_data=N
 # ==========================================================================
 # 15-POINT INSTITUTIONAL RISK ENGINE
 # ==========================================================================
-def validate_trade_risk(signal_data):
+def validate_trade_risk(signal_data, login=None, server_name=None):
     """Strict 15-point multi-layer risk inspection before order dispatch."""
     now = time.time()
     today_str = time.strftime('%Y-%m-%d')
@@ -780,35 +780,40 @@ def validate_trade_risk(signal_data):
     score = int(signal_data.get('score', 0))
     signal_id = signal_data.get('signal_id') or signal_data.get('id') or f"{symbol}_{trade_type}_{int(now)}"
 
+    req_login = login or signal_data.get('login') or ''
+    req_server = server_name or signal_data.get('server') or 'JustMarkets-Demo'
+
     with autotrade_lock:
-        if autotrade_state['daily_stats']['date'] != today_str:
-            autotrade_state['daily_stats'] = {
+        target_state = get_or_create_user_account(req_login, req_server) if req_login else autotrade_state
+
+        if target_state['daily_stats']['date'] != today_str:
+            target_state['daily_stats'] = {
                 'date': today_str,
                 'trades_opened': 0,
-                'starting_balance': autotrade_state['account']['balance'],
+                'starting_balance': target_state['account']['balance'],
                 'realized_pnl': 0.0,
                 'floating_pnl': 0.0,
                 'consecutive_losses': 0,
                 'cooldown_until': 0.0,
-                'peak_equity': autotrade_state['account']['equity']
+                'peak_equity': target_state['account']['equity']
             }
 
-        cfg = autotrade_state['risk_config']
-        acc = autotrade_state['account']
-        d_stats = autotrade_state['daily_stats']
+        cfg = target_state['risk_config']
+        acc = target_state['account']
+        d_stats = target_state['daily_stats']
 
         # 1. Master AutoTrade Enable Check
-        if not autotrade_state['enabled']:
-            return False, "AUTOTRADE_DISABLED", "التداول الآلي متوقف حالياً في لوحة التحكم"
+        if not target_state['enabled']:
+            return False, "AUTOTRADE_DISABLED", "التداول الآلي متوقف حالياً في لوحة التحكم (اضغط تفعيل التداول الآلي 🟢)"
 
         # 2. Emergency Kill Switch Check
-        if autotrade_state['emergency_stop']:
-            return False, "EMERGENCY_STOP_ACTIVE", f"تم تفعيل زر الطوارئ سابقاً: {autotrade_state['emergency_reason']}"
+        if target_state['emergency_stop']:
+            return False, "EMERGENCY_STOP_ACTIVE", f"تم تفعيل زر الطوارئ سابقاً: {target_state['emergency_reason']}"
 
-        # 3. Live MT5 Heartbeat Freshness (< 10s timeout)
+        # 3. Live MT5 Heartbeat Freshness (< 60s timeout)
         heartbeat_age = now - acc['last_heartbeat']
-        if not acc['connected'] or (acc['last_heartbeat'] > 0 and heartbeat_age > 10.0):
-            return False, "MT5_DISCONNECTED", "انقطع الاتصال ببرنامج الميتاتريدر أو توقف الإكسبرت (Heartbeat Timeout > 10s)"
+        if not acc['connected'] or (acc['last_heartbeat'] > 0 and heartbeat_age > 60.0):
+            return False, "MT5_DISCONNECTED", "انقطع الاتصال ببرنامج الميتاتريدر أو توقف الإكسبرت (Heartbeat Timeout > 60s)"
 
         # 4. Starting Balance & Drawdown Calculation
         if d_stats['starting_balance'] <= 0:
@@ -1454,13 +1459,22 @@ def autotrade_post_connect():
 @app.route('/api/autotrade/toggle', methods=['POST'])
 def autotrade_post_toggle():
     data = request.json or {}
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login') or data.get('login', '')
+    req_server = request.args.get('server') or request.headers.get('X-Account-Server') or data.get('server', 'JustMarkets-Demo')
+
     with autotrade_lock:
+        u_state = get_or_create_user_account(req_login, req_server) if req_login else autotrade_state
         if 'enabled' in data:
-            autotrade_state['enabled'] = bool(data['enabled'])
+            u_state['enabled'] = bool(data['enabled'])
         else:
-            autotrade_state['enabled'] = not autotrade_state['enabled']
-        is_on = autotrade_state['enabled']
+            u_state['enabled'] = not u_state['enabled']
+        is_on = u_state['enabled']
+        autotrade_state['enabled'] = is_on
         save_persisted_state()
+
+    # Update database account enabled state
+    if req_login:
+        database.update_account_enabled_db(req_server, req_login, is_on)
 
     msg = 'تم تفعيل التداول الآلي بنجاح 🟢' if is_on else 'تم إيقاف التداول الآلي ⏸️'
     log_audit_event("AUTOTRADE_TOGGLE", "SYSTEM", None, msg)
@@ -1508,12 +1522,11 @@ def autotrade_post_config():
 @app.route('/api/autotrade/execute', methods=['POST'])
 def autotrade_post_execute():
     data = request.json or {}
-    
-    # Extract login and server to support multi-account
-    req_login = request.args.get('login') or request.headers.get('X-Account-Login')
-    
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login') or data.get('login', '')
+    req_server = request.args.get('server') or request.headers.get('X-Account-Server') or data.get('server', 'JustMarkets-Demo')
+
     with execution_mutex:
-        passed, code_err, result = validate_trade_risk(data)
+        passed, code_err, result = validate_trade_risk(data, req_login, req_server)
         if not passed:
             log_audit_event("TRADE_REJECTED", data.get('symbol'), None, f"رفض الصفقة: {result} (كود: {code_err})")
             return jsonify({'status': 'rejected', 'code': code_err, 'message': result}), 400
@@ -1530,10 +1543,11 @@ def autotrade_post_execute():
         signal_id = result['signal_id']
         idem_key = result.get('idempotency_key', '')
 
-        # Queue persistent trade command (do NOT create fake position)
+        # 1. Queue into SQLite Database
+        cmd_db = database.queue_command_db(req_server, req_login, trade_type, symbol, lot=lot, entry=entry, sl=sl, tp1=tp1, tp2=tp2, tp3=tp3, signal_id=signal_id)
+
+        # 2. Also keep in memory commands store
         cmd = queue_trade_command(trade_type, symbol, lot=lot, entry=entry, sl=sl, tp1=tp1, tp2=tp2, tp3=tp3, signal_id=signal_id)
-        
-        # Link command to account if necessary
         if req_login:
             cmd['login'] = req_login
             
@@ -1549,27 +1563,30 @@ def autotrade_post_execute():
 def autotrade_post_close():
     data = request.json or {}
     ticket = str(data.get('ticket', ''))
-    req_login = request.args.get('login') or request.headers.get('X-Account-Login')
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login') or data.get('login', '')
+    req_server = request.args.get('server') or request.headers.get('X-Account-Server') or data.get('server', 'JustMarkets-Demo')
 
     with autotrade_lock:
-        target_state = get_or_create_user_account(req_login) if req_login else autotrade_state
+        target_state = get_or_create_user_account(req_login, req_server) if req_login else autotrade_state
         target = None
         for p in target_state['open_positions']:
             if str(p['ticket']) == ticket:
                 target = p
                 break
 
-        if not target:
-            return jsonify({'status': 'error', 'message': 'التيكت غير موجود في الصفقات المفتوحة'}), 404
+        target_symbol = target['symbol'] if target else 'ALL'
+        if target:
+            target['status'] = 'CLOSE_REQUESTED'
+            save_persisted_state()
 
-        target['status'] = 'CLOSE_REQUESTED'
-        save_persisted_state()
+    # Queue close command in SQLite Database
+    cmd_db = database.queue_command_db(req_server, req_login, 'CLOSE', target_symbol, ticket=ticket)
 
-    cmd = queue_trade_command('CLOSE', target['symbol'], ticket=ticket)
+    cmd = queue_trade_command('CLOSE', target_symbol, ticket=ticket)
     if req_login:
         cmd['login'] = req_login
         
-    log_audit_event("CLOSE_REQUESTED", target['symbol'], ticket, f"طلب إغلاق يدوي للصفقة #{ticket}")
+    log_audit_event("CLOSE_REQUESTED", target_symbol, ticket, f"طلب إغلاق يدوي للصفقة #{ticket}")
     return jsonify({'status': 'success', 'message': f'تم إرسال طلب إغلاق الصفقة #{ticket}', 'command': cmd})
 
 @app.route('/api/autotrade/close-all', methods=['POST'])

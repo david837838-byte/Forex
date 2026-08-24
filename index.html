@@ -1341,6 +1341,21 @@
                 <!-- Tab 2: Live Open Positions -->
                 <div class="at-tab-content active" id="attab-positions" style="display: block;">
                     <div class="card" style="background: rgba(15,22,35,0.5); border: 1px solid rgba(255,215,0,0.2); padding: 1rem; border-radius: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.85rem; flex-wrap: wrap; gap: 0.5rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <h4 style="color: var(--gold); font-size: 0.95rem; margin: 0;"><i class="fa-solid fa-bolt"></i> الصفقات النشطة قيد التنفيذ:</h4>
+                                <span class="badge badge-live" id="at-live-indicator">حي ومباشر 🟢</span>
+                            </div>
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                <button class="btn btn-sm btn-gold" id="at-scan-execute-btn" style="padding: 0.35rem 0.85rem; font-size: 0.8rem;">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i> فحص السوق والدخول بالفرص القوية الآن
+                                </button>
+                                <button class="btn btn-sm btn-outline" id="at-test-trade-btn" style="border-color: var(--info); color: var(--info); padding: 0.35rem 0.85rem; font-size: 0.8rem;">
+                                    <i class="fa-solid fa-vial"></i> تجربة أمر فتح فوري (0.01 لوت)
+                                </button>
+                            </div>
+                        </div>
+
                         <div class="table-responsive">
                             <table class="custom-table" style="width:100%; text-align:center; font-size:0.85rem;">
                                 <thead>
@@ -1528,7 +1543,7 @@
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 
     <!-- Main JavaScript App Logic -->
-    <script src="app.js?v=38"></script>
+    <script src="app.js?v=39"></script>
 
     <!-- AI Assistant Floating Widget -->
     <div id="ai-assistant-widget" class="ai-widget-container">

@@ -273,6 +273,18 @@ def update_risk_config_db(server, login, cfg_data):
         finally:
             conn.close()
 
+def update_account_enabled_db(server, login, enabled):
+    """Updates account enabled state in SQLite."""
+    key = get_account_key(server, login)
+    now = time.time()
+    with db_lock:
+        conn = get_connection()
+        try:
+            with conn:
+                conn.execute("UPDATE accounts SET enabled = ?, updated_at = ? WHERE account_key = ?", (1 if enabled else 0, now, key))
+        finally:
+            conn.close()
+
 def update_account_telemetry(server, login, data):
     """Updates live account balance, equity, and heartbeat from MT5."""
     key = get_account_key(server, login)
@@ -518,7 +530,7 @@ def get_pending_commands_db(server="", login=""):
             with conn:
                 c = conn.cursor()
                 if key:
-                    c.execute("SELECT * FROM commands WHERE account_key = ? AND status = 'QUEUED' AND expires_at >= ?", (key, now))
+                    c.execute("SELECT * FROM commands WHERE (account_key = ? OR account_key = 'default_account') AND status = 'QUEUED' AND expires_at >= ?", (key, now))
                 else:
                     c.execute("SELECT * FROM commands WHERE status = 'QUEUED' AND expires_at >= ?", (now,))
                 rows = [dict(r) for r in c.fetchall()]
