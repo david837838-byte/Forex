@@ -2902,10 +2902,10 @@ Evaluate objectively. Return ONLY valid JSON:
 
             if (openCountBadge) openCountBadge.textContent = openPos.length;
 
-            if (isConnected && acc.balance > 0) {
+            if (acc && typeof acc.balance === 'number' && acc.balance > 0) {
                 if (kpiBal) kpiBal.textContent = `$${acc.balance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-                if (kpiEq) kpiEq.textContent = `$${acc.equity.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-                if (kpiFree) kpiFree.textContent = `$${acc.free_margin.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                if (kpiEq) kpiEq.textContent = `$${(acc.equity || acc.balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                if (kpiFree) kpiFree.textContent = `$${(acc.free_margin || acc.balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
             } else {
                 if (kpiBal) kpiBal.textContent = '—';
                 if (kpiEq) kpiEq.textContent = '—';
@@ -2923,8 +2923,8 @@ Evaluate objectively. Return ONLY valid JSON:
             const bridgeBanner = document.getElementById('at-bridge-status-banner');
             const syncBadge = document.getElementById('at-last-sync-badge');
             if (bridgeText) {
-                if (isConnected) {
-                    bridgeText.innerHTML = `مربوط بالبروكر (${acc.server || 'JustMarkets-Demo'} #${acc.login || ''}) 🟢`;
+                if (acc.login) {
+                    bridgeText.innerHTML = `مربوط بالبروكر (${acc.server || 'JustMarkets-Demo'} #${acc.login}) 🟢`;
                     bridgeText.className = 'text-success';
                     if (bridgeBanner) {
                         bridgeBanner.style.background = 'rgba(0,230,118,0.1)';
