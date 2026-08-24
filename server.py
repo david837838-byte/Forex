@@ -5,6 +5,7 @@ import json
 import urllib.request
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+import database
 
 try:
     import resource
@@ -1278,8 +1279,8 @@ def mt5_ea_sync():
     if auth_secret and auth_secret != EA_WEBHOOK_SECRET:
         return jsonify({'status': 'unauthorized', 'message': 'Invalid Webhook Secret Key'}), 401
 
-    login = str(data.get('login', ''))
-    server_name = str(data.get('server', ''))
+    login = str(data.get('login', '')).strip()
+    server_name = str(data.get('server', '')).strip()
     currency = str(data.get('currency', 'USD'))
     account_type = str(data.get('account_type', 'DEMO'))
     leverage = int(data.get('leverage', 100))
@@ -1290,6 +1291,16 @@ def mt5_ea_sync():
     positions = data.get('positions', [])
     now = time.time()
 
+    # 1. Update SQLite Database
+    database.update_account_telemetry(server_name, login, {
+        'balance': balance, 'equity': equity, 'margin': margin,
+        'free_margin': free_margin, 'margin_level': round((equity / margin) * 100, 2) if margin > 0 else 0.0,
+        'currency': currency, 'account_type': account_type, 'leverage': leverage
+    })
+    if isinstance(positions, list):
+        database.reconcile_mt5_positions_db(server_name, login, positions)
+
+    # 2. Also keep memory cache updated
     with autotrade_lock:
         u_state = get_or_create_user_account(login, server_name)
         u_acc = u_state['account']
@@ -1317,13 +1328,8 @@ def mt5_ea_sync():
             reconcile_positions_with_mt5(positions, u_state)
             u_acc['last_position_sync'] = now
 
-    commands_to_send = []
-    with command_lock:
-        for cid, cmd in commands_store.items():
-            if cmd['status'] == 'QUEUED' and now <= cmd['expires_at']:
-                # Ensure we only send commands that match this user's account if we track account_id
-                cmd['status'] = 'SENT_TO_EA'
-                commands_to_send.append(cmd)
+    # 3. Pull pending commands from SQLite
+    commands_to_send = database.get_pending_commands_db(server_name, login)
 
     return jsonify({
         'status': 'success',
@@ -1332,63 +1338,54 @@ def mt5_ea_sync():
     })
 
 # ==========================================================================
-# AUTOTRADE CONTROL & TWO-TIER EMERGENCY ENDPOINTS
+# UNIFIED CONSOLIDATED DASHBOARD ENDPOINT (All-in-One Snapshot)
 # ==========================================================================
+@app.route('/api/autotrade/dashboard', methods=['GET'])
+def autotrade_get_dashboard():
+    """Unified single endpoint returning account, risk, positions, history, and logs in 1 query."""
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login') or ''
+    req_server = request.args.get('server') or request.headers.get('X-Account-Server') or 'JustMarkets-Demo'
+    return jsonify(database.get_dashboard_snapshot(req_server, req_login))
+
 @app.route('/api/autotrade/status', methods=['GET'])
 def autotrade_get_status():
-    req_login = request.args.get('login') or request.headers.get('X-Account-Login')
-    with autotrade_lock:
-        target_state = get_or_create_user_account(req_login) if req_login else autotrade_state
-        now = time.time()
-        hb = target_state['account']['last_heartbeat']
-        is_fresh = (now - hb) < 10.0 if hb > 0 else False
-        return jsonify({
-            'status': 'success',
-            'enabled': target_state['enabled'],
-            'mode': target_state['mode'],
-            'emergency_stop': target_state['emergency_stop'],
-            'emergency_reason': target_state['emergency_reason'],
-            'is_heartbeat_fresh': is_fresh,
-            'account': target_state['account'],
-            'risk_config': target_state['risk_config'],
-            'daily_stats': target_state['daily_stats'],
-            'open_positions_count': len(target_state['open_positions']),
-            'history_count': len(target_state['history'])
-        })
-def _old_unused_status():
-    with autotrade_lock:
-        now = time.time()
-        is_fresh = False
-        return jsonify({
-            'status': 'success',
-            'enabled': autotrade_state['enabled'],
-            'mode': autotrade_state['mode'],
-            'emergency_stop': autotrade_state['emergency_stop'],
-            'emergency_reason': autotrade_state['emergency_reason'],
-            'is_heartbeat_fresh': is_fresh,
-            'account': autotrade_state['account'],
-            'risk_config': autotrade_state['risk_config'],
-            'daily_stats': autotrade_state['daily_stats'],
-            'open_positions_count': len(autotrade_state['open_positions']),
-            'history_count': len(autotrade_state['history'])
-        })
-
-@app.route('/api/autotrade/account', methods=['GET'])
-def autotrade_get_account():
-    with autotrade_lock:
-        return jsonify({'status': 'success', 'account': autotrade_state['account']})
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login') or ''
+    req_server = request.args.get('server') or request.headers.get('X-Account-Server') or 'JustMarkets-Demo'
+    snap = database.get_dashboard_snapshot(req_server, req_login)
+    return jsonify({
+        'status': 'success',
+        'enabled': snap['enabled'],
+        'mode': snap['mode'],
+        'emergency_stop': snap['emergency_stop'],
+        'emergency_reason': snap['emergency_reason'],
+        'is_heartbeat_fresh': snap['is_heartbeat_fresh'],
+        'account': snap['account'],
+        'risk_config': snap['risk_config'],
+        'daily_stats': snap['daily_stats'],
+        'open_positions_count': len(snap['open_positions']),
+        'history_count': len(snap['history'])
+    })
 
 @app.route('/api/autotrade/positions', methods=['GET'])
 def autotrade_get_positions():
-    req_login = request.args.get('login') or request.headers.get('X-Account-Login')
-    with autotrade_lock:
-        target_state = get_or_create_user_account(req_login) if req_login else autotrade_state
-        return jsonify({'status': 'success', 'positions': target_state['open_positions']})
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login') or ''
+    req_server = request.args.get('server') or request.headers.get('X-Account-Server') or 'JustMarkets-Demo'
+    snap = database.get_dashboard_snapshot(req_server, req_login)
+    return jsonify({'status': 'success', 'positions': snap['open_positions']})
 
 @app.route('/api/autotrade/history', methods=['GET'])
 def autotrade_get_history():
-    with autotrade_lock:
-        return jsonify({'status': 'success', 'history': autotrade_state['history'][:30]})
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login') or ''
+    req_server = request.args.get('server') or request.headers.get('X-Account-Server') or 'JustMarkets-Demo'
+    snap = database.get_dashboard_snapshot(req_server, req_login)
+    return jsonify({'status': 'success', 'history': snap['history']})
+
+@app.route('/api/autotrade/audit-logs', methods=['GET'])
+def autotrade_get_audit_logs():
+    req_login = request.args.get('login') or request.headers.get('X-Account-Login') or ''
+    req_server = request.args.get('server') or request.headers.get('X-Account-Server') or 'JustMarkets-Demo'
+    snap = database.get_dashboard_snapshot(req_server, req_login)
+    return jsonify({'status': 'success', 'logs': snap['audit_logs']})
 
 @app.route('/api/autotrade/health', methods=['GET'])
 def autotrade_get_health():
@@ -1590,11 +1587,6 @@ def autotrade_post_emergency_stop():
 
     log_audit_event("EMERGENCY_STOP_TRIGGERED", "SYSTEM", None, reason)
     return jsonify({'status': 'success', 'message': f'🚨 تم تفعيل إغلاق الطوارئ الشامل وإيقاف التداول: {reason}'})
-
-@app.route('/api/autotrade/audit-logs', methods=['GET'])
-def autotrade_get_audit_logs():
-    with autotrade_lock:
-        return jsonify({'status': 'success', 'logs': audit_logs[:50]})
 
 @app.route('/api/mt5/download-ea', methods=['GET'])
 def mt5_download_ea():

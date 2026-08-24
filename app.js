@@ -2822,15 +2822,9 @@ Evaluate objectively. Return ONLY valid JSON:
                 const savedServer = localStorage.getItem('mp_at_server') || document.getElementById('at-server-name')?.value.trim() || 'JustMarkets-Demo';
                 const queryParam = savedLogin ? `?login=${encodeURIComponent(savedLogin)}&server=${encodeURIComponent(savedServer)}` : '';
 
-                const [statusRes, posRes, histRes, logsRes] = await Promise.all([
-                    fetch(`${this.apiBase}/api/autotrade/status${queryParam}`),
-                    fetch(`${this.apiBase}/api/autotrade/positions${queryParam}`),
-                    fetch(`${this.apiBase}/api/autotrade/history${queryParam}`),
-                    fetch(`${this.apiBase}/api/autotrade/audit-logs${queryParam}`)
-                ]);
-
-                if (statusRes.ok) {
-                    const data = await statusRes.json();
+                const res = await fetch(`${this.apiBase}/api/autotrade/dashboard${queryParam}`);
+                if (res.ok) {
+                    const data = await res.json();
                     if (data.status === 'success') {
                         this.state.enabled = data.enabled;
                         this.state.mode = data.mode;
@@ -2840,45 +2834,26 @@ Evaluate objectively. Return ONLY valid JSON:
                         this.state.account = data.account || this.state.account;
                         this.state.risk_config = data.risk_config || this.state.risk_config;
                         this.state.daily_stats = data.daily_stats || this.state.daily_stats;
+                        this.state.open_positions = data.open_positions || [];
+                        this.state.history = data.history || [];
+                        this.state.audit_logs = data.audit_logs || [];
                     }
                 }
 
-                if (posRes.ok) {
-                    const pData = await posRes.json();
-                    if (pData.status === 'success') {
-                        this.state.open_positions = pData.positions || [];
-                    }
+                // Auto-populate Connection Form Fields if not actively focused
+                const acc = this.state.account || {};
+                const serverInput = document.getElementById('at-server-name');
+                const loginInput = document.getElementById('at-login-num');
+                if (serverInput && acc.server && !serverInput.matches(':focus')) {
+                    serverInput.value = acc.server;
+                }
+                if (loginInput && acc.login && !loginInput.matches(':focus')) {
+                    loginInput.value = acc.login;
                 }
 
-                if (histRes.ok) {
-                    const hData = await histRes.json();
-                    if (hData.status === 'success') {
-                        this.state.history = hData.history || [];
-                    }
-                }
-
-                if (logsRes.ok) {
-                    const lData = await logsRes.json();
-                    if (lData.status === 'success') {
-                        this.state.audit_logs = lData.logs || [];
-                    }
-                }
-
-                
-            // 7. Auto-populate Connection Form Fields if not actively focused
-            const acc = this.state.account || {};
-            const serverInput = document.getElementById('at-server-name');
-            const loginInput = document.getElementById('at-login-num');
-            if (serverInput && acc.server && !serverInput.matches(':focus')) {
-                serverInput.value = acc.server;
-            }
-            if (loginInput && acc.login && !loginInput.matches(':focus')) {
-                loginInput.value = acc.login;
-            }
-
-            this.renderUI();
+                this.renderUI();
             } catch (e) {
-                console.error('syncStatus Error:', e);
+                console.warn('syncStatus Error:', e);
                 this.state.account.connected = false;
                 this.renderUI();
             }
@@ -3346,8 +3321,29 @@ Evaluate objectively. Return ONLY valid JSON:
                 });
             });
 
-            // 6. AutoTrade Background Polling Paused (Manual Trigger Only)
-            // Polling is stopped per user request to prioritize core Backend & Live Prices.
+            // 6. Smart Modal-Aware Polling (Fast when modal is open, gentle background check when closed)
+            setInterval(() => {
+                const modal = document.getElementById('autotrade-modal');
+                const isModalOpen = modal && (modal.style.display === 'flex' || modal.style.display === 'block');
+                if (isModalOpen) {
+                    this.syncStatus();
+                }
+            }, 3000);
+
+            // Gentle background heartbeat check every 15s (Only if account login is saved)
+            setInterval(() => {
+                const modal = document.getElementById('autotrade-modal');
+                const isModalOpen = modal && (modal.style.display === 'flex' || modal.style.display === 'block');
+                const savedLogin = localStorage.getItem('mp_at_login');
+                if (!isModalOpen && savedLogin) {
+                    this.syncStatus();
+                }
+            }, 15000);
+
+            // Initial check on startup
+            if (localStorage.getItem('mp_at_login')) {
+                this.syncStatus();
+            }
         }
     };
 
