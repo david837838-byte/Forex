@@ -124,7 +124,7 @@ string ResolveBrokerSymbol(string reqSym)
    if(StringFind(_Symbol, reqSym) >= 0) return _Symbol;
    
    // Check common broker suffixes
-   string suffixes[] = {"m", "c", ".", "_", ".raw", "raw", ".pro", "pro", "i", ".m"};
+   string suffixes[] = {".s", "s", "_s", "m", ".m", "c", ".", "_", ".raw", "raw", ".pro", "pro", "i", ".ecn"};
    for(int i = 0; i < ArraySize(suffixes); i++)
    {
       string testSym = reqSym + suffixes[i];
